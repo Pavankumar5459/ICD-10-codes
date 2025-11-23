@@ -188,4 +188,21 @@ if search:
         st.error("❌ No ICD-10 codes found for your search.")
     else:
         st.success(f"✨ Found {len(results)} matching result(s)")
-        st.dataframe(results, use_container_
+        st.dataframe(results, use_container_width=True)
+else:
+    st.info("Start typing a keyword to search ICD-10 codes. Showing the first 25 codes below.")
+    st.dataframe(filtered_df.head(25), use_container_width=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# -----------------------------
+# Footer
+# -----------------------------
+st.markdown(
+    """
+    <div class='hh-footer'>
+        © 2025 Hanvion Health • ICD-10 Lookup Platform • CMS 2026 ICD-10 Data • All Rights Reserved.
+    </div>
+    """,
+    unsafe_allow_html=True
+)

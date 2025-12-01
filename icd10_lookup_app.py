@@ -1,275 +1,227 @@
 # ============================================================
-# Hanvion Health – ICD-10 Explorer (Final + Feature X PDF Export)
+# HANVION HEALTH • ICD-10 EXPLORER  (Clean UI + No HTML showing)
 # Dataset used: section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx
 # ============================================================
 
 import streamlit as st
 import pandas as pd
-import re
 from io import BytesIO
-from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
 
 # ============================================================
-# 1. PAGE CONFIG
+# PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="Hanvion Health · ICD-10 Explorer",
+    page_title="Hanvion Health • ICD-10 Explorer",
     layout="wide",
     page_icon="💠"
 )
 
-
-# ============================================================
-# 2. HINVION CSS THEME
-# ============================================================
+# Hanvion style (no HTML leakage)
 st.markdown("""
 <style>
-.icd-card {
+.han-card {
     background: #faf5ff;
     border: 1px solid #e9d8fd;
-    border-radius: 14px;
-    padding: 18px;
+    padding: 20px;
+    border-radius: 15px;
     margin-top: 18px;
 }
 .code-badge {
     background: #6b46c1;
     color: white;
-    padding: 4px 10px;
+    padding: 5px 12px;
     border-radius: 6px;
-    font-size: 13px;
-    display: inline-block;
-    margin-bottom: 6px;
-}
-.muted {
-    color: #6b7280;
-    font-size: 13px;
-}
-.severity-pill {
     font-weight: 600;
+    font-size: 14px;
+}
+.han-muted {
+    color:#6b7280; 
+    font-size:13px;
 }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# 3. LOAD ICD DATA (AUTO-Detect Columns)
+# LOAD DATASET (AUTO-MAPPING ANY COLUMN NAMES)
 # ============================================================
 @st.cache_data
-def load_icd10():
-    file_path = "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"
-    df = pd.read_excel(file_path, dtype=str).fillna("")
+def load_data():
+    df = pd.read_excel(
+        "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
+        dtype=str
+    ).fillna("")
 
-    # Normalize → dynamic column matching
-    col_map = {"code": "", "description": "", "long_description": "", "chapter": "", "category": ""}
+    df.columns = [c.lower().strip() for c in df.columns]
 
-    for col in df.columns:
-        c = col.lower()
-        if ("code" in c and "icd" in c) or c == "code":
-            col_map["code"] = col
-        elif "short" in c or ("desc" in c and "long" not in c):
-            col_map["description"] = col
-        elif "long" in c:
-            col_map["long_description"] = col
-        elif "chapter" in c:
-            col_map["chapter"] = col
-        elif "category" in c or "group" in c:
-            col_map["category"] = col
+    def pick(*keys):
+        for k in keys:
+            for col in df.columns:
+                if k in col:
+                    return col
+        return None
 
-    # Build unified DataFrame
-    df_clean = pd.DataFrame()
-    df_clean["code"] = df.get(col_map["code"], "")
-    df_clean["description"] = df.get(col_map["description"], "")
-    df_clean["long_description"] = df.get(col_map["long_description"], "")
-    df_clean["chapter"] = df.get(col_map["chapter"], "")
-    df_clean["category"] = df.get(col_map["category"], "")
+    col_code = pick("code", "icd")
+    col_desc = pick("desc", "short")
+    col_long = pick("long")
+    col_chapter = pick("chapter")
+    col_cat = pick("category", "group")
 
-    return df_clean
+    out = pd.DataFrame()
+    out["code"] = df.get(col_code, "")
+    out["description"] = df.get(col_desc, "")
+    out["long_description"] = df.get(col_long, "")
+    out["chapter"] = df.get(col_chapter, "N/A")
+    out["category"] = df.get(col_cat, "N/A")
+    return out
 
 
-df = load_icd10()
+df = load_data()
 
 
 # ============================================================
-# 4. Severity Heuristic
+# SEVERITY HEURISTIC
 # ============================================================
-def severity(code, desc):
-    text = (code + " " + desc).lower()
-
-    if any(w in text for w in ["coma", "respiratory failure", "shock", "sepsis"]):
+def get_severity(code, desc):
+    text = f"{code} {desc}".lower()
+    if "coma" in text or "shock" in text or "respiratory failure" in text:
         return "Severe", "🔴🔴"
-    if any(w in text for w in ["uncontrolled", "acute", "exacerbation"]):
+    if "acute" in text or "exacerbation" in text:
         return "Moderate", "🟡🟡"
     return "Mild", "🟢🟢"
 
 
 # ============================================================
-# 5. AI Educational Explanation (Offline)
+# OFFLINE AI EXPLANATIONS (NO API NEEDED)
 # ============================================================
-def ai_quick_summary(code, desc):
-    return f"""
-### Quick Summary for {code}
+def explain_basic(code, desc):
+    return f"**{code}** classifies the condition:\n\n{desc}\n\nThis helps clinicians document and communicate the diagnosis."
 
-**{desc}** is a medically recognized condition classified under ICD-10.  
-This code standardizes communication across hospitals, insurers, and EHR systems.
-"""
+def explain_clinical(code, desc):
+    return f"Clinically, **{code}** groups similar conditions for evaluation, analytics, and follow-up planning."
 
+def explain_patient(code, desc):
+    return f"This code represents the condition: **{desc}**.\nDoctors use this for medical records — not a treatment plan."
 
-def ai_clinical_summary(code, desc):
-    return f"""
-### Clinical Overview
-
-- Helps clinicians document the condition clearly  
-- Used to group diseases in analytics & risk scoring  
-- Supports decision-making across healthcare teams  
-- Not a treatment plan — purely classification  
-"""
-
-
-def ai_patient_friendly(code, desc):
-    return f"""
-### Patient-Friendly Explanation
-
-This code (**{code}**) represents:
-
-**{desc}**
-
-Doctors use this label to document your condition in medical records.  
-It helps them plan care, track symptoms, and share information with other clinicians.
-
-This is educational — always talk to your doctor for personal advice.
-"""
-
-
-def ai_clinical_pathway(code, desc):
-    return f"""
-### Clinical Pathway (Educational Only)
-
-Typical steps may include:
-
-- Initial evaluation based on symptoms  
-- Relevant labs or imaging if required  
-- Documenting whether severity is mild/moderate/severe  
-- Follow-up planning  
-- Monitoring for complications  
-
-This varies by patient — not medical advice.
-"""
+def explain_pathway(code, desc):
+    return "Typical educational clinical pathway:\n- Initial evaluation\n- Relevant labs/imaging\n- Severity documentation\n- Follow-up monitoring"
 
 
 # ============================================================
-# 6. PDF GENERATOR (Feature X)
+# PDF EXPORT FEATURE
 # ============================================================
 def build_pdf(row):
-    """Creates a 1-page PDF summary for the ICD code."""
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
-    x = 50
-    y = height - 50
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+    y = h - 50
 
-    def put(text, size=12, bold=False, space=20):
+    def text(t, size=12, bold=False, space=20):
         nonlocal y
         font = "Helvetica-Bold" if bold else "Helvetica"
         c.setFont(font, size)
-        c.drawString(x, y, text)
+        c.drawString(40, y, t)
         y -= space
 
-    put("Hanvion Health – ICD-10 Summary", 16, True, 30)
-    put(f"Code: {row['code']}", 14, True)
-    put(f"Description: {row['description']}", 12)
-    put(f"Details: {row['long_description']}", 12)
-    put(f"Chapter: {row['chapter']}   Category: {row['category']}", 11)
-    put("Severity (educational):", 12, True)
-    
-    sev_label, sev_icon = severity(row["code"], row["description"])
-    put(f"{sev_icon} {sev_label}", 12)
-
-    put("Educational Only — Not for billing or diagnosis.", 10, False, 40)
+    text("Hanvion Health – ICD-10 Summary", 16, True, 30)
+    text(f"Code: {row['code']}", 14, True)
+    text(f"Description: {row['description']}")
+    text(f"Details: {row['long_description']}")
+    text(f"Chapter: {row['chapter']}   Category: {row['category']}")
+    sev_label, sev_icon = get_severity(row["code"], row["description"])
+    text(f"Severity: {sev_icon} {sev_label}")
+    text("Educational only — Not medical advice.", 10, False, 40)
 
     c.showPage()
     c.save()
-    buffer.seek(0)
-    return buffer
+    buf.seek(0)
+    return buf
 
 
 # ============================================================
-# 7. Render ICD Card
+# RENDER CARD (PURE STREAMLIT — NO HTML LEAKING)
 # ============================================================
-def render_card(row):
+def show_icd_card(row):
     code = row["code"]
     desc = row["description"]
     longd = row["long_description"]
-    chapter = row["chapter"] or "N/A"
-    category = row["category"] or "N/A"
 
-    sev_label, sev_icon = severity(code, desc)
+    sev_label, sev_icon = get_severity(code, desc)
 
-    # MAIN CARD UI (unchanged)
-    st.markdown(f"""
-    <div class="icd-card">
-        <div class="code-badge">{code}</div>
+    with st.container():
+        st.markdown('<div class="han-card">', unsafe_allow_html=True)
 
-        <h3>{desc}</h3>
-        <p style="font-size:14px;">{longd}</p>
+        st.markdown(f"<span class='code-badge'>{code}</span>", unsafe_allow_html=True)
+        st.markdown(f"### {desc}")
+        st.markdown(f"{longd}")
 
-        <p class="muted">Chapter: {chapter} · Category: {category}</p>
+        st.markdown(
+            f"<p class='han-muted'>Chapter: {row['chapter']} · Category: {row['category']}</p>",
+            unsafe_allow_html=True
+        )
 
-        <p class="muted">
-            Severity: <span class="severity-pill">{sev_icon} {sev_label}</span>
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+        st.markdown(
+            f"<p class='han-muted'>Severity: {sev_icon} {sev_label}</p>",
+            unsafe_allow_html=True
+        )
 
-    # ===== ADD-ON EXPANDERS =====
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # AI sections
     with st.expander("🧠 AI Quick Summary"):
-        st.markdown(ai_quick_summary(code, desc))
+        st.write(explain_basic(code, desc))
 
     with st.expander("📚 Clinical Explanation"):
-        st.markdown(ai_clinical_summary(code, desc))
+        st.write(explain_clinical(code, desc))
 
     with st.expander("❤️ Patient-Friendly Explanation"):
-        st.markdown(ai_patient_friendly(code, desc))
+        st.write(explain_patient(code, desc))
 
-    with st.expander("🩺 Clinical Pathway"):
-        st.markdown(ai_clinical_pathway(code, desc))
+    with st.expander("🩺 Educational Clinical Pathway"):
+        st.write(explain_pathway(code, desc))
 
+    # Related codes
     with st.expander("Related ICD-10 Codes"):
         prefix = code[:3]
-        related = df[df["code"].str.startswith(prefix)]
-        for _, r in related.iterrows():
+        rel = df[df["code"].str.startswith(prefix)]
+        for _, r in rel.iterrows():
             if r["code"] != code:
-                st.write(f"**{r['code']}** — {r['description']}")
+                st.write(f"{r['code']} — {r['description']}")
 
-    # ===== PDF EXPORT BUTTON (Feature X) =====
-    pdf_file = build_pdf(row)
+    # PDF EXPORT
+    pdf = build_pdf(row)
     st.download_button(
-        label="Download PDF Summary",
-        data=pdf_file,
-        file_name=f"{code}_hanvion_summary.pdf",
+        "Download PDF Summary",
+        pdf,
+        file_name=f"{code}_summary.pdf",
         mime="application/pdf"
     )
 
 
 # ============================================================
-# 8. MAIN APP LOGIC
+# MAIN UI
 # ============================================================
-st.title("Hanvion Health · ICD-10 Explorer")
+st.title("Hanvion Health • ICD-10 Explorer")
 st.caption("Search ICD codes, view clinical context, and generate summaries.")
 
 query = st.text_input("Search by ICD code or diagnosis")
-per_page = st.number_input("Results per page", 5, 50, 20)
+per_page = st.number_input("Results per page", min_value=5, max_value=50, value=20)
 
-# FILTER LOGIC
+# Filtering
 if query:
     q = query.lower()
-    results = df[df.apply(lambda r: q in r["code"].lower() or q in r["description"].lower(), axis=1)]
+    results = df[
+        df["code"].str.lower().str.contains(q) |
+        df["description"].str.lower().str.contains(q)
+    ]
 else:
     results = df
 
 total = len(results)
-page = st.number_input("Page", 1, max(1, (total - 1) // per_page + 1), 1)
+page = st.number_input("Page", min_value=1, max_value=max(1, total // per_page + 1), value=1)
 
 start = (page - 1) * per_page
 end = start + per_page
@@ -277,8 +229,6 @@ subset = results.iloc[start:end]
 
 st.caption(f"Showing {start+1}–{min(end, total)} of {total} results")
 
-# Render Results
+# Render
 for _, row in subset.iterrows():
-    render_card(row)
-
-# END OF FILE
+    show_icd_card(row)

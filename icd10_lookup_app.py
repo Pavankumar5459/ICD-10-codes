@@ -4,7 +4,7 @@ import requests
 import os
 
 # =========================================================
-#  Hanvion Health – ICD-10 Explorer (PPLX + CMS Dataset)
+#  Hanvion Health – ICD-10 Explorer (Perplexity AI)
 # =========================================================
 
 st.set_page_config(
@@ -24,7 +24,6 @@ def load_icd10():
         engine="openpyxl"
     ).fillna("")
 
-    # Normalize column names
     df.columns = (
         df.columns.str.strip()
         .str.lower()
@@ -33,18 +32,16 @@ def load_icd10():
         .str.replace(")", "")
     )
 
-    # Expected CMS column names
-    # CODE, SHORT DESCRIPTION (VALID ICD-10 FY2025), LONG DESCRIPTION (VALID ICD-10 FY2025), NF EXCL
     code_col = "code"
     short_col = "short_description_valid_icd-10_fy2025"
     long_col = "long_description_valid_icd-10_fy2025"
     excl_col = "nf_excl"
 
     final = pd.DataFrame()
-    final["code"] = df[code_col].astype(str).str.strip()
-    final["short"] = df[short_col].astype(str).str.strip()
-    final["long"] = df[long_col].astype(str).str.strip()
-    final["exclusions"] = df[excl_col].astype(str).str.strip()
+    final["code"] = df[code_col].astype(str)
+    final["short"] = df[short_col].astype(str)
+    final["long"] = df[long_col].astype(str)
+    final["exclusions"] = df[excl_col].astype(str)
 
     return final
 
@@ -53,14 +50,10 @@ df = load_icd10()
 
 
 # =========================================================
-#  HANVION THEME CSS
+#  HANVION CSS UI
 # =========================================================
-HANVION_CSS = """
+st.markdown("""
 <style>
-
-body, input, textarea, select {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial;
-}
 
 .h-banner {
     width:100%;
@@ -71,19 +64,6 @@ body, input, textarea, select {
     text-align:center;
     margin-top:40px;
     margin-bottom:30px;
-}
-
-.code-box {
-    background:#f7f7fb;
-    padding:22px;
-    border-radius:12px;
-    border:1px solid #e2e8f0;
-    margin-top:10px;
-}
-
-.dark-mode .code-box {
-    background:#1e293b !important;
-    border-color:#334155 !important;
 }
 
 .result-card {
@@ -99,43 +79,36 @@ body, input, textarea, select {
     border-color:#334155 !important;
 }
 
-.h-muted {
-    color:#6b7280;
-}
-
-.dark-mode .h-muted {
-    color:#cbd5e1 !important;
-}
+.h-muted { color:#6b7280; }
+.dark-mode .h-muted { color:#cbd5e1 !important; }
 
 </style>
-"""
-
-st.markdown(HANVION_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 
 # =========================================================
-#  PERPLEXITY AI FUNCTION (using PPLX_API_KEY)
+#  PERPLEXITY FUNCTION (FIXED MODEL)
 # =========================================================
 def ask_ai(prompt):
-    """Uses Perplexity pplx-7b-chat with your secret key"""
-
     api_key = st.secrets["PPLX_API_KEY"]
 
     url = "https://api.perplexity.ai/chat/completions"
+
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
+    # FIXED: use valid Perplexity model
     payload = {
-        "model": "pplx-7b-chat",
+        "model": "sonar-medium-online",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.2
     }
 
     try:
-        res = requests.post(url, json=payload, headers=headers, timeout=20)
-        out = res.json()
+        r = requests.post(url, json=payload, headers=headers, timeout=20)
+        out = r.json()
         if "choices" in out:
             return out["choices"][0]["message"]["content"]
         else:
@@ -151,7 +124,7 @@ st.markdown(
     """
     <div class="h-banner">
         <h1>Hanvion Health · ICD-10 Explorer</h1>
-        <p>Search official CMS ICD-10 codes with optional AI-powered educational explanations.</p>
+        <p>Search official CMS ICD-10 codes with AI-powered educational summaries.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -171,7 +144,7 @@ page = st.number_input("Page", 1, 999999, 1)
 
 
 # =========================================================
-#  RUN SEARCH
+#  SEARCH LOGIC
 # =========================================================
 if query.strip() == "":
     st.info("Begin typing above to search ICD-10 codes.")
@@ -194,7 +167,7 @@ st.write(f"Showing {start+1}–{min(end, total)} of {total} results.\n")
 
 
 # =========================================================
-#  DISPLAY RESULTS
+#  DISPLAY EACH RESULT
 # =========================================================
 for _, row in page_df.iterrows():
     st.markdown(
@@ -207,57 +180,57 @@ for _, row in page_df.iterrows():
         unsafe_allow_html=True,
     )
 
+    # --- Clinical Explanation ---
     with st.expander("Clinical explanation (educational only)"):
-        ask = st.button(f"Explain clinically: {row['code']}", key=f"c-{row['code']}")
-        if ask:
+        if st.button(f"Explain clinically: {row['code']}", key=f"c-{row['code']}"):
             prompt = f"""
-            Provide a clinical, medical explanation for ICD-10 code {row['code']}:
+            Provide a detailed clinical explanation for ICD-10 code {row['code']}:
+
             {row['short']}
             {row['long']}
 
-            Format:
+            Include:
             - Clinical meaning
-            - Typical symptoms
-            - How clinicians interpret this code
-            - Why it matters
-            - Not medical advice
+            - Typical signs/symptoms
+            - Why clinicians use this code
+            - How it differs from nearby codes
+            Not medical advice.
             """
-            out = ask_ai(prompt)
-            st.write(out)
+            st.write(ask_ai(prompt))
 
+    # --- Patient-friendly explanation ---
     with st.expander("Patient-friendly explanation"):
-        ask2 = st.button(f"Explain simply: {row['code']}", key=f"p-{row['code']}")
-        if ask2:
+        if st.button(f"Explain simply: {row['code']}", key=f"p-{row['code']}"):
             prompt = f"""
-            Explain ICD-10 code {row['code']} in simple, patient-friendly language.
+            Explain ICD-10 code {row['code']} in simple language.
 
             Include:
             - What the condition means
-            - Common symptoms
-            - When someone should contact a clinician
-            - NOT medical advice
+            - Typical symptoms
+            - When someone should seek help
+            Not medical advice.
             """
-            out = ask_ai(prompt)
-            st.write(out)
+            st.write(ask_ai(prompt))
 
+    # --- Compare codes ---
     with st.expander("Compare with another ICD-10 code"):
-        compare_query = st.text_input(
-            f"Enter another ICD-10 code to compare with {row['code']}",
+        cmp_code = st.text_input(
+            f"Enter another code to compare with {row['code']}",
             key=f"cmp-{row['code']}"
         )
-        if compare_query:
+        if cmp_code:
             prompt = f"""
             Compare ICD-10 code {row['code']} ({row['short']})
-            with ICD-10 code {compare_query}.
+            with {cmp_code}.
 
             Include:
-            - Difference in condition type
-            - Severity differences
-            - Body system affected
-            - Situations where each is used
-            - Educational only
+            - Differences
+            - Severity
+            - Body system
+            - Usage context
+            Educational only.
             """
-            out = ask_ai(prompt)
-            st.write(out)
+            st.write(ask_ai(prompt))
 
     st.markdown("---")
+

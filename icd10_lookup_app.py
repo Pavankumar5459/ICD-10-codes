@@ -1,167 +1,35 @@
 # icd10_lookup_app.py
-# Hanvion Health · ICD-10 Explorer with optional Perplexity AI helpers
+# Hanvion Health · ICD-10 Explorer with Perplexity AI (educational only)
 
 import os
-import textwrap
-from typing import Optional, Tuple
-
-import pandas as pd
+import math
 import requests
+import pandas as pd
 import streamlit as st
 
-# -----------------------------------------------------------------------------
-# CONFIG
-# -----------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Hanvion Health · ICD-10 Explorer",
-    page_icon="💠",
-    layout="wide",
-)
-
-# -----------------------------------------------------------------------------
-# THEME (Hanvion style)
-# -----------------------------------------------------------------------------
-HANVION_CSS = """
-<style>
-/* Base layout */
-.block-container {
-    max-width: 1100px !important;
-    padding-top: 1.5rem !important;
-}
-
-/* Typography */
-body, input, textarea {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-}
-
-/* Code card */
-.hanvion-card {
-    background: #faf5ff;
-    border-radius: 14px;
-    border: 1px solid #e5e7eb;
-    padding: 18px 20px;
-    margin-bottom: 16px;
-}
-
-/* Code badge */
-.hanvion-code-pill {
-    display: inline-block;
-    padding: 4px 10px;
-    border-radius: 999px;
-    background: #4c1d95;
-    color: #f9fafb;
-    font-size: 11px;
-    font-weight: 600;
-}
-
-/* Muted text */
-.hanvion-muted {
-    color: #6b7280;
-    font-size: 12px;
-}
-
-/* Section label */
-.hanvion-section-label {
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    font-size: 11px;
-    color: #9ca3af;
-}
-
-/* Buttons */
-.hanvion-button {
-    border-radius: 999px !important;
-}
-
-/* Hide expand/collapse cursor highlight on headings */
-h1, h2, h3, h4, h5 {
-    user-select: none;
-}
-
-/* Expander title style */
-.streamlit-expanderHeader {
-    font-size: 13px;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-    background: #f8fafc;
-    border-right: 1px solid #e5e7eb;
-}
-</style>
-"""
-st.markdown(HANVION_CSS, unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# DATA LOADING
-# -----------------------------------------------------------------------------
-DATA_FILE = "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"
-
-
-@st.cache_data(show_spinner=True)
-def load_icd10_data() -> pd.DataFrame:
-    """Load CMS ICD-10 Excel and normalize column names.
-
-    Expected columns in file:
-    - CODE
-    - SHORT DESCRIPTION (VALID ICD-10 FY2025)
-    - LONG DESCRIPTION (VALID ICD-10 FY2025)
-    """
-    df = pd.read_excel(DATA_FILE, dtype=str).fillna("")
-
-    df = df.rename(
-        columns={
-            "CODE": "code",
-            "SHORT DESCRIPTION (VALID ICD-10 FY2025)": "short_description",
-            "LONG DESCRIPTION (VALID ICD-10 FY2025)": "long_description",
-        }
-    )
-
-    # Ensure required columns exist
-    if "code" not in df.columns:
-        raise ValueError("Dataset must contain a 'CODE' column.")
-
-    if "short_description" not in df.columns:
-        df["short_description"] = df["long_description"]
-
-    if "long_description" not in df.columns:
-        df["long_description"] = df["short_description"]
-
-    # Simple derived columns
-    if "chapter" not in df.columns:
-        df["chapter"] = "N/A"
-    if "category" not in df.columns:
-        df["category"] = df["code"].str[:3]
-
-    return df[["code", "short_description", "long_description", "chapter", "category"]]
-
-
-# -----------------------------------------------------------------------------
-# PERPLEXITY AI HELPER
-# -----------------------------------------------------------------------------
-def get_pplx_key() -> Optional[str]:
-    key = os.getenv("PPLX_API_KEY")
-    if key:
-        return key
+# ---------------------------------------------------------
+#  Perplexity AI helpers
+# ---------------------------------------------------------
+def get_pplx_key() -> str | None:
+    """Get Perplexity API key from environment or Streamlit secrets."""
     try:
-        key = st.secrets.get("PPLX_API_KEY", None)
+        return os.getenv("PPLX_API_KEY") or st.secrets.get("PPLX_API_KEY")
     except Exception:
-        key = None
-    return key
+        return os.getenv("PPLX_API_KEY")
 
 
-def call_perplexity(
-    user_prompt: str,
-    system_prompt: str,
-    temperature: float = 0.3,
-) -> Tuple[Optional[str], Optional[str]]:
+def ask_perplexity(prompt: str) -> dict:
     """
-    Call Perplexity's /chat/completions endpoint.
-    Returns (content, error_message).
+    Call Perplexity AI safely.
+    Returns dict: {success: bool, response: str | None, error: str | None}
     """
     api_key = get_pplx_key()
     if not api_key:
-        return None, "AI is not configured. Add PPLX_API_KEY in your Streamlit secrets."
+        return {
+            "success": False,
+            "response": None,
+            "error": "Perplexity API key not found. Add PPLX_API_KEY in your Streamlit secrets.",
+        }
 
     url = "https://api.perplexity.ai/chat/completions"
     headers = {
@@ -173,293 +41,395 @@ def call_perplexity(
         "messages": [
             {
                 "role": "system",
-                "content": system_prompt,
+                "content": (
+                    "You are a clinical explainer for ICD-10 codes. "
+                    "You provide concise, structured, educational summaries only. "
+                    "You never give medical advice or treatment recommendations."
+                ),
             },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
+            {"role": "user", "content": prompt},
         ],
-        "temperature": temperature,
+        "temperature": 0.2,
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=25)
+        res = requests.post(url, json=payload, headers=headers, timeout=30)
+
+        if res.status_code == 401:
+            return {
+                "success": False,
+                "response": None,
+                "error": "Perplexity API key is invalid or not authorized (401).",
+            }
+
+        if res.status_code >= 400:
+            return {
+                "success": False,
+                "response": None,
+                "error": f"Perplexity error {res.status_code}: {res.text}",
+            }
+
+        data = res.json()
+        reply = data["choices"][0]["message"]["content"]
+        return {"success": True, "response": reply, "error": None}
+
     except Exception as e:
-        return None, f"AI network error: {e}"
-
-    if resp.status_code != 200:
-        return None, f"AI error (status {resp.status_code}). Please try again later."
-
-    try:
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        return content, None
-    except Exception as e:
-        return None, f"AI response parsing error: {e}"
+        return {
+            "success": False,
+            "response": None,
+            "error": f"Perplexity request failed: {e}",
+        }
 
 
-# -----------------------------------------------------------------------------
-# SIMPLE UTILITIES
-# -----------------------------------------------------------------------------
-def wrap(text: str, width: int = 90) -> str:
-    return "\n".join(textwrap.wrap(text, width=width))
-
-
-def filter_icd10(df: pd.DataFrame, query: str) -> pd.DataFrame:
-    """Case-insensitive filter on code + descriptions."""
-    if not query:
-        return df.iloc[0:0]  # empty
-    q = query.strip().lower()
-    mask = (
-        df["code"].str.lower().str.contains(q, na=False)
-        | df["short_description"].str.lower().str.contains(q, na=False)
-        | df["long_description"].str.lower().str.contains(q, na=False)
-    )
-    return df[mask]
-
-
-def symptom_suggest(df: pd.DataFrame, text: str, limit: int = 10) -> pd.DataFrame:
-    """Very lightweight 'symptom to ICD code' helper using text match only."""
-    if not text:
-        return df.iloc[0:0]
-    q = text.strip().lower()
-    mask = (
-        df["short_description"].str.lower().str.contains(q, na=False)
-        | df["long_description"].str.lower().str.contains(q, na=False)
-    )
-    return df[mask].head(limit)
-
-
-# -----------------------------------------------------------------------------
-# MAIN APP
-# -----------------------------------------------------------------------------
-def main() -> None:
-    df = load_icd10_data()
-    enable_ai = get_pplx_key() is not None
-
-    st.markdown("### Hanvion Health · ICD-10 Explorer")
+# ---------------------------------------------------------
+#  Styling
+# ---------------------------------------------------------
+def inject_hanvion_css():
     st.markdown(
-        "Search ICD-10 codes, view structured context, and optionally explore "
-        "AI-generated educational summaries. This tool is **not** a billing "
-        "or diagnostic system."
-    )
+        """
+        <style>
+        body, input, textarea, button, select {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
 
-    st.markdown('<div class="hanvion-section-label">Search</div>', unsafe_allow_html=True)
+        .block-container {
+            max-width: 1150px;
+            padding-top: 1.5rem;
+        }
 
-    col_q, col_n = st.columns([4, 1])
-    with col_q:
-        query = st.text_input(
-            "Search by ICD-10 code or diagnosis",
-            placeholder="Example: E11, asthma, fracture",
-        )
-    with col_n:
-        page_size = st.number_input(
-            "Results per page",
-            min_value=10,
-            max_value=100,
-            value=20,
-            step=10,
-        )
+        /* Headings */
+        h1, h2, h3 {
+            font-weight: 700;
+            color: #111827;
+        }
 
-    col_page, _ = st.columns([1, 3])
-    with col_page:
-        page_num = st.number_input("Page", min_value=1, value=1, step=1)
+        /* ICD card */
+        .icd-card {
+            background: #fbf5ff;
+            border-radius: 14px;
+            border: 1px solid #e5e7eb;
+            padding: 18px 20px 16px 20px;
+            margin-bottom: 14px;
+        }
 
-    st.divider()
+        .icd-code-pill {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #7e22ce;
+            color: white;
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
 
-    # -------------------------------------------------------------------------
-    # RESULTS
-    # -------------------------------------------------------------------------
-    if not query.strip():
-        st.info("Start by entering an ICD-10 code or diagnosis in the search box above.")
-        st.markdown("---")
-    else:
-        results = filter_icd10(df, query)
-        total = len(results)
+        .icd-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0 0 4px 0;
+        }
 
-        if total == 0:
-            st.warning("No matching ICD-10 codes found. Try a broader term or different wording.")
-        else:
-            st.markdown(
-                f"Showing results **{min((page_num-1)*page_size+1, total)}–"
-                f"{min(page_num*page_size, total)}** of **{total}**."
-            )
+        .icd-desc {
+            font-size: 13px;
+            color: #374151;
+            margin: 0 0 4px 0;
+        }
 
-            start = (page_num - 1) * page_size
-            end = start + page_size
-            page_df = results.iloc[start:end]
+        .icd-meta {
+            font-size: 11px;
+            color: #6b7280;
+            margin-top: 4px;
+        }
 
-            for _, row in page_df.iterrows():
-                with st.container():
-                    st.markdown('<div class="hanvion-card">', unsafe_allow_html=True)
+        .muted-note {
+            font-size: 11px;
+            color: #6b7280;
+        }
 
-                    # Header
-                    st.markdown(
-                        f'<span class="hanvion-code-pill">{row["code"]}</span>',
-                        unsafe_allow_html=True,
-                    )
-                    st.markdown(
-                        f"#### {row['short_description']}",
-                        help="Educational use only.",
-                    )
+        [data-testid="stSidebar"] {
+            background: #f9fafb;
+            border-right: 1px solid #e5e7eb;
+        }
 
-                    if row["long_description"]:
-                        st.markdown(row["long_description"])
-                    st.markdown(
-                        f'<p class="hanvion-muted">Chapter: {row.get("chapter","N/A")} · '
-                        f'Category: {row.get("category","N/A")}</p>',
-                        unsafe_allow_html=True,
-                    )
-
-                    # --- Add-on: Clinical explanation (AI or fallback) -----------------
-                    with st.expander("Clinical explanation (educational only)"):
-                        st.markdown(
-                            "These summaries are generated for learning purposes only "
-                            "and are **not** medical advice."
-                        )
-
-                        if enable_ai:
-                            if st.button(
-                                "Generate clinical explanation",
-                                key=f"explain_{row['code']}",
-                            ):
-                                with st.spinner("Asking AI for an explanation..."):
-                                    sys_prompt = (
-                                        "You are a clinical documentation assistant. "
-                                        "Explain ICD-10 codes in clear, educational language "
-                                        "for students and health data analysts. "
-                                        "Do not give treatment recommendations, and explicitly "
-                                        "state that this is not medical advice."
-                                    )
-                                    user_prompt = (
-                                        f"Explain ICD-10 code {row['code']} "
-                                        f"({row['short_description']}). "
-                                        f"Use 3–5 bullet points."
-                                    )
-                                    content, err = call_perplexity(user_prompt, sys_prompt)
-                                if err:
-                                    st.error(err)
-                                elif content:
-                                    st.markdown(content)
-                        else:
-                            st.info(
-                                "AI explanation is not configured. Add `PPLX_API_KEY` to enable "
-                                "Perplexity-powered summaries."
-                            )
-                            st.markdown(
-                                "- Code context: "
-                                f"{wrap(row['long_description'] or row['short_description'])}"
-                            )
-
-                    # --- Add-on: Patient-friendly summary (still educational) ----------
-                    with st.expander("Patient-friendly summary (educational only)"):
-                        if enable_ai:
-                            if st.button(
-                                "Generate simple explanation",
-                                key=f"patient_{row['code']}",
-                            ):
-                                with st.spinner("Generating a simple explanation..."):
-                                    sys_prompt = (
-                                        "You explain medical concepts in simple language. "
-                                        "Audience: adults with no medical training. "
-                                        "Keep it short (about 120 words), avoid scary language, "
-                                        "and never give treatment advice."
-                                    )
-                                    user_prompt = (
-                                        f"Explain ICD-10 code {row['code']} "
-                                        f"({row['short_description']})."
-                                    )
-                                    content, err = call_perplexity(user_prompt, sys_prompt)
-                                if err:
-                                    st.error(err)
-                                elif content:
-                                    st.markdown(content)
-                        else:
-                            st.info(
-                                "AI is not configured. When enabled, this section will generate "
-                                "a patient-friendly summary."
-                            )
-
-                    # --- Add-on: Code comparison (Feature D) ---------------------------
-                    with st.expander("Compare with another ICD-10 code"):
-                        st.markdown(
-                            "Use this to understand conceptual differences between two codes. "
-                            "Educational use only."
-                        )
-                        other = st.text_input(
-                            "Code to compare with",
-                            key=f"compare_input_{row['code']}",
-                            placeholder="Example: A001",
-                        )
-                        if enable_ai and other.strip():
-                            if st.button(
-                                "Compare codes",
-                                key=f"compare_btn_{row['code']}",
-                            ):
-                                with st.spinner("Comparing codes with AI..."):
-                                    sys_prompt = (
-                                        "You compare ICD-10 codes for documentation and analytics. "
-                                        "Describe how the two codes differ in clinical concept, "
-                                        "typical use, and any important exclusions. "
-                                        "Do not give treatment advice."
-                                    )
-                                    user_prompt = (
-                                        f"Compare ICD-10 codes {row['code']} "
-                                        f"({row['short_description']}) and "
-                                        f"{other.strip()}. "
-                                        "Use bullet points and keep it concise."
-                                    )
-                                    content, err = call_perplexity(user_prompt, sys_prompt)
-                                if err:
-                                    st.error(err)
-                                elif content:
-                                    st.markdown(content)
-                        elif not enable_ai:
-                            st.info(
-                                "AI comparison requires `PPLX_API_KEY`. Configure it to use this feature."
-                            )
-
-                    st.markdown("</div>", unsafe_allow_html=True)  # end card
-
-    # -------------------------------------------------------------------------
-    # Symptom-based helper (Feature E)
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.markdown("#### Symptom helper (search-based — not a diagnosis tool)")
-    st.markdown(
-        "Type symptoms or a lay description to see **related ICD-10 codes** from the dataset. "
-        "This is a keyword search to support learning and analytics — it is **not** a "
-        "diagnostic suggestion."
-    )
-
-    symptom_text = st.text_input(
-        "Describe symptoms or condition (optional)",
-        placeholder="Example: chest pain, shortness of breath",
-    )
-
-    if symptom_text.strip():
-        suggestions = symptom_suggest(df, symptom_text, limit=10)
-        if len(suggestions) == 0:
-            st.info("No codes matched those terms. Try different wording.")
-        else:
-            st.markdown(
-                f"Showing {len(suggestions)} codes that mention similar terms "
-                "in their descriptions:"
-            )
-            for _, srow in suggestions.iterrows():
-                st.markdown(
-                    f"- **{srow['code']}** — {srow['short_description']}"
-                )
-
-    # Footer
-    st.markdown("---")
-    st.markdown(
-        '<p class="hanvion-muted">Hanvion Health · ICD-10 Lookup • '
-        "Educational use only • Not for billing or medical decision-making.</p>",
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
 
+# ---------------------------------------------------------
+#  Data loading
+# ---------------------------------------------------------
+@st.cache_data(show_spinner="Loading ICD-10 codes...")
+def load_icd10_data() -> pd.DataFrame:
+    """
+    Load ICD-10 data from the CMS Excel file and standardise columns.
+    We do NOT change the original file; we just map what exists.
+    """
+    # 1) Try CMS Excel
+    if os.path.exists("section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"):
+        df_raw = pd.read_excel(
+            "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
+            dtype=str,
+        )
+    # 2) Fallback to CSV, if you ever have it
+    elif os.path.exists("icd10_data.csv"):
+        df_raw = pd.read_csv("icd10_data.csv", dtype=str)
+    else:
+        raise FileNotFoundError(
+            "No ICD-10 data file found. Expected "
+            "'section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx' "
+            "or 'icd10_data.csv' in the app folder."
+        )
+
+    df_raw = df_raw.fillna("")
+    cols = [str(c) for c in df_raw.columns]
+    lower_cols = [c.lower().strip() for c in cols]
+
+    # Helper to find a column by keywords
+    def find_col(*keywords, default_index=None):
+        for i, name in enumerate(lower_cols):
+            if all(k in name for k in keywords):
+                return cols[i]
+        if default_index is not None and default_index < len(cols):
+            return cols[default_index]
+        return None
+
+    code_col = find_col("icd", "code") or find_col("code") or cols[0]
+    short_col = (
+        find_col("short", "desc")
+        or find_col("description")
+        or find_col("desc")
+        or cols[1]
+        if len(cols) > 1
+        else code_col
+    )
+    long_col = find_col("long", "desc") or short_col
+    chapter_col = find_col("chapter")
+    category_col = find_col("category")
+
+    df = pd.DataFrame()
+    df["code"] = df_raw[code_col].astype(str).str.strip()
+    df["title"] = df_raw[short_col].astype(str).str.strip()
+    df["description"] = df_raw[long_col].astype(str).str.strip()
+
+    if chapter_col:
+        df["chapter"] = df_raw[chapter_col].astype(str).str.strip()
+    else:
+        df["chapter"] = ""
+
+    if category_col:
+        df["category"] = df_raw[category_col].astype(str).str.strip()
+    else:
+        df["category"] = ""
+
+    # Drop empty codes
+    df = df[df["code"] != ""].reset_index(drop=True)
+    return df
+
+
+# ---------------------------------------------------------
+#  Main UI
+# ---------------------------------------------------------
+def main():
+    inject_hanvion_css()
+    st.set_page_config(page_title="Hanvion Health · ICD-10 Explorer", page_icon="🧬", layout="wide")
+
+    df = load_icd10_data()
+
+    # ---- Header ----
+    st.title("Hanvion Health · ICD-10 Explorer")
+    st.markdown(
+        "Search ICD-10 codes and view structured, educational context. "
+        "This tool is **not** for billing or medical decision making."
+    )
+
+    st.markdown("---")
+
+    # ---- Search Controls ----
+    col_q, col_page_size = st.columns([3, 1])
+    with col_q:
+        query = st.text_input(
+            "Search by ICD code or diagnosis",
+            value="",
+            placeholder="Example: E11, diabetes, asthma, fracture",
+        ).strip()
+    with col_page_size:
+        page_size = st.number_input("Results per page", min_value=5, max_value=50, value=20, step=5)
+
+    # Page selector (only relevant when we have results)
+    page_number = st.number_input("Page", min_value=1, value=1, step=1)
+
+    st.markdown("---")
+
+    # ---- No query yet → do not show any codes ----
+    if not query:
+        st.info("Start by typing an ICD code or condition name above to see results.")
+        st.markdown(
+            f"<p class='muted-note'>Total ICD-10 codes available: {len(df):,}. Dataset for education only.</p>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # ---- Filter results ----
+    mask_code = df["code"].str.contains(query, case=False, na=False)
+    mask_title = df["title"].str.contains(query, case=False, na=False)
+    mask_desc = df["description"].str.contains(query, case=False, na=False)
+    df_filtered = df[mask_code | mask_title | mask_desc].reset_index(drop=True)
+
+    total_results = len(df_filtered)
+    if total_results == 0:
+        st.warning("No ICD-10 codes matched your search. Try a different keyword or partial code.")
+        return
+
+    total_pages = max(1, math.ceil(total_results / page_size))
+    # Clamp page_number
+    if page_number > total_pages:
+        page_number = total_pages
+
+    start_idx = (page_number - 1) * page_size
+    end_idx = start_idx + page_size
+    page_df = df_filtered.iloc[start_idx:end_idx]
+
+    st.caption(f"Showing {start_idx + 1:,}–{min(end_idx, total_results):,} of {total_results:,} matching codes.")
+
+    # -------------------------------------------------
+    # Render each ICD-10 card
+    # -------------------------------------------------
+    for row_idx, row in page_df.iterrows():
+        code = row["code"]
+        title = row["title"] or "(no title available)"
+        desc = row["description"] or "No additional description in dataset."
+        chapter = row["chapter"] or "N/A"
+        category = row["category"] or "N/A"
+
+        # Card layout
+        card_html = f"""
+        <div class="icd-card">
+            <div class="icd-code-pill">{code}</div>
+            <div class="icd-title">{title}</div>
+            <p class="icd-desc">{desc}</p>
+            <p class="icd-meta">Chapter: {chapter} · Category: {category}</p>
+        </div>
+        """
+        st.markdown(card_html, unsafe_allow_html=True)
+
+        # ---------- AI + comparison section ----------
+        with st.expander("Clinical explanation (educational only)", expanded=False):
+            st.markdown(
+                "<p class='muted-note'>These explanations are for learning only and are not medical advice.</p>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Generate clinical explanation", key=f"clin_{start_idx + row_idx}"):
+                with st.spinner("Generating explanation..."):
+                    prompt = (
+                        f"Provide a short clinical overview of ICD-10 code {code}: {title}. "
+                        f"Use bullet points where useful. Include typical clinical context, "
+                        f"but do NOT give treatment recommendations. "
+                        f"Base it only on general medical knowledge."
+                    )
+                    result = ask_perplexity(prompt)
+
+                if result["success"]:
+                    st.write(result["response"])
+                else:
+                    st.error(result["error"])
+                    # Simple fallback text
+                    st.markdown(
+                        f"""
+                        **Basic summary (non-AI fallback)**  
+                        • Code: **{code}**  
+                        • Name: **{title}**  
+                        • Description: {desc}
+                        """,
+                    )
+
+        with st.expander("Patient-friendly summary (educational only)", expanded=False):
+            st.markdown(
+                "<p class='muted-note'>Use this to practise explaining conditions in simple language. "
+                "It is not personalised medical advice.</p>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Generate simple explanation", key=f"simple_{start_idx + row_idx}"):
+                with st.spinner("Generating simplified explanation..."):
+                    prompt = (
+                        f"Explain ICD-10 condition {code}: {title} in plain language for a non-medical reader. "
+                        f"Keep it short (about 8–10 sentences). Do NOT give treatment instructions "
+                        f"or say what medicine to take. Be neutral and educational."
+                    )
+                    result = ask_perplexity(prompt)
+
+                if result["success"]:
+                    st.write(result["response"])
+                else:
+                    st.error(result["error"])
+                    st.markdown(
+                        f"""
+                        **Basic summary (non-AI fallback)**  
+                        This code describes: **{title}**.  
+                        The dataset does not contain more patient-friendly details for this code.
+                        """
+                    )
+
+        with st.expander("Compare with another ICD-10 code", expanded=False):
+            st.markdown(
+                "<p class='muted-note'>Use this to contrast two codes conceptually. "
+                "For billing or clinical use, always check official coding manuals.</p>",
+                unsafe_allow_html=True,
+            )
+            other_code = st.text_input(
+                "Other ICD-10 code to compare with",
+                "",
+                key=f"compare_input_{start_idx + row_idx}",
+            ).strip()
+
+            if st.button("Compare codes", key=f"compare_btn_{start_idx + row_idx}"):
+                if not other_code:
+                    st.warning("Please type another ICD-10 code to compare.")
+                else:
+                    # Try to pull basic info for other code from dataset
+                    other_row = df[df["code"].str.upper() == other_code.upper()]
+                    if not other_row.empty:
+                        o = other_row.iloc[0]
+                        oc_title = o["title"] or "(no title available)"
+                        oc_desc = o["description"] or ""
+                        st.markdown(
+                            f"**Found {other_code.upper()} in dataset** — {oc_title}",
+                        )
+                        if oc_desc:
+                            st.caption(oc_desc)
+
+                    with st.spinner("Generating conceptual comparison..."):
+                        prompt = (
+                            f"Compare ICD-10 codes {code} ({title}) and {other_code}. "
+                            "Explain how they are similar and how they differ in terms of condition type, "
+                            "body system, and typical use, in a short bullet list. "
+                            "Do not discuss billing amounts or treatment choices."
+                        )
+                        result = ask_perplexity(prompt)
+
+                    if result["success"]:
+                        st.write(result["response"])
+                    else:
+                        st.error(result["error"])
+                        st.info(
+                            "AI comparison is not available right now. "
+                            "Make sure your Perplexity API key is configured."
+                        )
+
+        st.markdown("")  # small space between records
+
+    # Footer note
+    st.markdown("---")
+    st.markdown(
+        "<p class='muted-note'>Hanvion Health · ICD-10 Explorer is for educational purposes only and "
+        "is not intended for diagnosis, treatment, billing, or coding decisions.</p>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------
+#  Entrypoint
+# ---------------------------------------------------------
 if __name__ == "__main__":
     main()

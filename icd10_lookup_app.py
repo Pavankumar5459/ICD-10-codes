@@ -6,189 +6,184 @@ import requests
 # PAGE CONFIG
 # ============================================================
 st.set_page_config(
-    page_title="Hanvion Health · ICD-10 Explorer",
+    page_title="Hanvion Health • ICD-10 Explorer",
+    page_icon="🩺",
     layout="wide"
 )
 
 # ============================================================
-# CUSTOM THEME (LAVENDER HANVION UI FROM THE VERSION YOU LIKED)
+# DARK MODE TOGGLE
+# ============================================================
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+# Right-aligned toggle
+col1, col2 = st.columns([8, 1])
+with col2:
+    if st.button("🌙" if not st.session_state.dark_mode else "☀️", help="Toggle dark mode"):
+        st.session_state.dark_mode = not st.session_state.dark_mode
+
+dark = st.session_state.dark_mode
+
+# ============================================================
+# DARK / LIGHT THEME STYLES
+# ============================================================
+light_css = """
+<style>
+body { background-color: #f8fbff; }
+.card {
+    padding: 20px;
+    background: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e6e9ee;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.04);
+}
+.header {
+    padding: 30px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #004a99, #0070cc);
+    color: white;
+    text-align: center;
+    margin-bottom: 25px;
+}
+</style>
+"""
+
+dark_css = """
+<style>
+body { background-color: #0d1117; }
+h1, h2, h3, label, p, span, div { color: #e6edf3 !important; }
+.card {
+    padding: 20px;
+    background: #161b22;
+    border-radius: 12px;
+    border: 1px solid #30363d;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+}
+input, textarea, select, .stNumberInput > div > input {
+    background-color: #21262d !important;
+    color: #e6edf3 !important;
+    border: 1px solid #30363d !important;
+}
+.header {
+    padding: 30px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #00254d, #005a9c);
+    color: white;
+    text-align: center;
+    margin-bottom: 25px;
+}
+</style>
+"""
+
+st.markdown(dark_css if dark else light_css, unsafe_allow_html=True)
+
+# ============================================================
+# HEADER
 # ============================================================
 st.markdown("""
-<style>
-/* Overall page */
-body {
-    background-color: #ffffff;
-}
-
-/* Title */
-.hanvion-title {
-    font-size: 36px;
-    font-weight: 900;
-    color: #1d1d1d;
-    margin-bottom: 10px;
-}
-
-/* Card container */
-.icd-card {
-    background: #f8f2ff;
-    border: 1px solid #e8d9ff;
-    padding: 22px;
-    border-radius: 14px;
-    margin-top: 25px;
-}
-
-/* Code badge */
-.code-badge {
-    background: #7b2ff7;
-    padding: 6px 14px;
-    border-radius: 12px;
-    font-size: 13px;
-    color: white;
-    display: inline-block;
-    margin-bottom: 10px;
-}
-
-/* Section header */
-.section-header {
-    font-size: 20px;
-    font-weight: 700;
-    margin-top: 25px;
-}
-
-/* Subcards */
-.subcard {
-    background: #ffffff;
-    border: 1px solid #ebe5f7;
-    padding: 15px;
-    border-radius: 10px;
-    margin-top: 10px;
-}
-
-/* Muted text */
-.muted {
-    color: #666;
-    font-size: 14px;
-}
-
-</style>
+<div class="header">
+    <h1>Hanvion Health • ICD-10 Explorer</h1>
+    <p>Search official CMS ICD-10 codes with AI-powered educational summaries.</p>
+</div>
 """, unsafe_allow_html=True)
 
+
 # ============================================================
-# LOAD CMS EXCEL DATASET
+# LOAD DATASET
 # ============================================================
 @st.cache_data
-def load_cms_excel():
+def load_icd10():
     df = pd.read_excel(
         "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
         dtype=str
     ).fillna("")
-    
-    df.columns = df.columns.str.strip().str.upper()
-    
-    # Standardize mapping
-    df_final = pd.DataFrame({
-        "code": df["CODE"],
-        "description": df["SHORT DESCRIPTION (VALID ICD-10 FY2025)"],
-        "long_description": df["LONG DESCRIPTION (VALID ICD-10 FY2025)"],
-        "nf_excl": df["NF EXCL"]
+    df = df.rename(columns={
+        "CODE": "code",
+        "SHORT DESCRIPTION (VALID ICD-10 FY2025)": "short",
+        "LONG DESCRIPTION (VALID ICD-10 FY2025)": "long",
+        "NF EXCL": "nf"
     })
-    return df_final
+    return df
 
-df = load_cms_excel()
+df = load_icd10()
 
-# ============================================================
-# SEARCH BAR
-# ============================================================
-st.markdown('<div class="hanvion-title">Hanvion Health · ICD-10 Explorer</div>', unsafe_allow_html=True)
-st.write("Search ICD-10 codes using the official CMS dataset. Educational explanations only.")
-
-query = st.text_input("Search ICD-10 code or diagnosis", placeholder="Example: E11, diabetes, asthma, fracture")
-
-results_per_page = st.number_input("Results per page", value=20, step=1)
-page = st.number_input("Page", min_value=1, value=1, step=1)
-
-# Perform search
-results = df[df.apply(lambda row: row.astype(str).str.contains(query, case=False).any(), axis=1)] if query else pd.DataFrame()
-
-# Pagination
-total_results = len(results)
-start = (page - 1) * results_per_page
-end = start + results_per_page
-page_results = results.iloc[start:end] if total_results > 0 else []
 
 # ============================================================
-# AI: PERPLEXITY
+# AI (Perplexity)
 # ============================================================
-def perplexity_generate(prompt, api_key):
-    if not api_key:
-        return "AI unavailable — please enter API key."
+PPLX_MODEL = "pplx-7b-chat"
 
-    url = "https://api.perplexity.ai/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    
-    payload = {
-        "model": "pplx-7b-online",  # BEST WORKING MODEL
-        "messages": [{"role": "user", "content": prompt}]
-    }
+def ask_ai(prompt):
+    key = st.session_state.get("pplx_api", "")
+    if not key:
+        return "**AI unavailable — enter Perplexity API key above.**"
 
     try:
-        r = requests.post(url, json=payload, headers=headers)
+        r = requests.post(
+            "https://api.perplexity.ai/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": PPLX_MODEL, "messages": [{"role": "user", "content": prompt}]}
+        )
         if r.status_code != 200:
             return f"AI Error {r.status_code}: {r.text}"
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"AI Request failed: {e}"
+        return f"AI Error: {str(e)}"
 
-# User's API key
-api_key = st.text_input("Perplexity API key (optional)", type="password")
 
 # ============================================================
-# SHOW RESULTS
+# SEARCH UI
 # ============================================================
-if query and total_results == 0:
-    st.warning("No matching ICD-10 codes found.")
+search = st.text_input(
+    "Search ICD-10 code or diagnosis",
+    placeholder="Example: J45, asthma, fracture, diabetes…"
+)
 
-if query and total_results > 0:
-    st.write(f"Showing {start+1}–{min(end,total_results)} of {total_results} results.")
+results_per_page = st.number_input("Results per page", 5, 50, 20)
+page = st.number_input("Page", 1, 9999, 1)
 
-    for _, row in page_results.iterrows():
-        code = row["code"]
-        desc = row["description"]
-        long_desc = row["long_description"]
-        nf = row["nf_excl"]
+st.session_state["pplx_api"] = st.text_input(
+    "Perplexity API key (optional)",
+    type="password"
+)
 
-        st.markdown(f"""
-        <div class="icd-card">
-            <div class="code-badge">{code}</div>
-            <h3>{desc}</h3>
-            <p class="muted">{long_desc}</p>
-        """, unsafe_allow_html=True)
 
-        # NF EXCL
-        if nf.strip():
-            with st.expander("Excluded conditions (NF EXCL)"):
-                st.write(nf)
+# ============================================================
+# SEARCH RESULTS
+# ============================================================
+if search.strip():
+    filtered = df[
+        df["code"].str.contains(search, case=False) |
+        df["short"].str.contains(search, case=False) |
+        df["long"].str.contains(search, case=False)
+    ]
 
-        # Clinical Explanation
+    total = len(filtered)
+    start = (page - 1) * results_per_page
+    end = start + results_per_page
+
+    st.write(f"Showing **{start+1}–{min(end, total)}** of **{total} results**")
+
+    for i, row in filtered.iloc[start:end].iterrows():
+        st.markdown(
+            f"""
+            <div class='card'>
+                <h3>{row["code"]} — {row["short"]}</h3>
+                <p>{row["long"]}</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
         with st.expander("Clinical explanation (educational only)"):
-            clinical_btn = st.button(f"Explain clinically: {code}", key=f"clin-{code}")
-            if clinical_btn:
-                prompt = f"Provide a clinical explanation for ICD-10 code {code}: {desc}. No emojis."
-                st.write(perplexity_generate(prompt, api_key))
+            if st.button(f"Explain clinically: {row['code']}", key=f"clin{i}"):
+                st.write(ask_ai(f"Explain ICD-10 code {row['code']} clinically."))
 
-        # Patient-friendly
-        with st.expander("Patient-friendly explanation"):
-            patient_btn = st.button(f"Explain simply: {code}", key=f"pat-{code}")
-            if patient_btn:
-                prompt = f"Explain ICD-10 code {code} ({desc}) in simple language for patients. No emojis."
-                st.write(perplexity_generate(prompt, api_key))
+        with st.expander("Explain in simple words"):
+            if st.button(f"Explain simply: {row['code']}", key=f"simp{i}"):
+                st.write(ask_ai(f"Explain ICD-10 code {row['code']} in simple language."))
 
-        # Compare code
-        with st.expander("Compare with another ICD-10 code"):
-            compare_code = st.text_input(f"Enter another ICD-10 code to compare with {code}", key=f"cmp-{code}")
-            compare_btn = st.button(f"Compare {code} with {compare_code}", key=f"cmpbtn-{code}")
-            if compare_btn:
-                prompt = f"Compare ICD-10 codes {code} and {compare_code}. Explain differences. No emojis."
-                st.write(perplexity_generate(prompt, api_key))
+else:
+    st.info("Begin typing above to search ICD-10 codes.")
 
-        st.markdown("</div>", unsafe_allow_html=True)

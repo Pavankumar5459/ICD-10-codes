@@ -1,208 +1,324 @@
+import os
 import streamlit as st
 import pandas as pd
 
-# -----------------------------
-# Page Configuration
-# -----------------------------
-st.set_page_config(
-    page_title="ICD-10 Lookup | Hanvion Health",
-    page_icon="🩺",
-    layout="wide"
-)
+ICD_XLSX = "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"
+ICD_PARQUET = "section111validicd10.parquet"
 
-# -----------------------------
-# Custom CSS (Hanvion Health Branding)
-# -----------------------------
-st.markdown(
+
+# ---------------------------
+# Chapter mapping (approx.)
+# ---------------------------
+def map_chapter(letter: str) -> str:
+    if not isinstance(letter, str) or not letter:
+        return "Unknown"
+
+    l = letter.upper()
+
+    # Very simplified high-level mapping by first letter
+    if l in ["A", "B"]:
+        return "A00-B99 · Infectious & Parasitic Diseases"
+    if l in ["C", "D"]:
+        return "C00-D49 · Neoplasms / Blood Disorders"
+    if l == "E":
+        return "E00-E89 · Endocrine, Nutritional, Metabolic"
+    if l == "F":
+        return "F01-F99 · Mental & Behavioural Disorders"
+    if l == "G":
+        return "G00-G99 · Nervous System"
+    if l == "H":
+        return "H00-H95 · Eye, Ear & Adnexa"
+    if l == "I":
+        return "I00-I99 · Circulatory System (Cardiology)"
+    if l == "J":
+        return "J00-J99 · Respiratory System"
+    if l == "K":
+        return "K00-K95 · Digestive System"
+    if l == "L":
+        return "L00-L99 · Skin/Subcutaneous Tissue"
+    if l == "M":
+        return "M00-M99 · Musculoskeletal"
+    if l == "N":
+        return "N00-N99 · Genitourinary"
+    if l == "O":
+        return "O00-O9A · Pregnancy, Childbirth"
+    if l == "P":
+        return "P00-P96 · Perinatal Conditions"
+    if l == "Q":
+        return "Q00-Q99 · Congenital Malformations"
+    if l == "R":
+        return "R00-R99 · Symptoms & Abnormal Findings"
+    if l == "S" or l == "T":
+        return "S00-T88 · Injury, Poisoning"
+    if l == "V" or l == "W" or l == "X" or l == "Y":
+        return "V00-Y99 · External Causes"
+    if l == "Z":
+        return "Z00-Z99 · Factors Influencing Health Status"
+
+    return "Other / Unmapped"
+
+
+# ---------------------------
+# Load + preprocess (cached)
+# ---------------------------
+@st.cache_data(show_spinner="Loading ICD-10 dataset…")
+def load_icd10():
     """
-    <style>
-    .main {
-        background-color: #F5F7FB;
-    }
-    .hh-header {
-        background: linear-gradient(90deg, #003262, #0369A1);
-        padding: 22px;
-        border-radius: 14px;
-        color: white;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.18);
-    }
-    .hh-title {
-        font-size: 36px;
-        font-weight: 800;
-        margin-bottom: 5px;
-    }
-    .hh-subtitle {
-        font-size: 16px;
-        opacity: 0.9;
-        font-weight: 400;
-    }
-    .hh-tagline {
-        margin-top: 10px;
-        font-size: 13px;
-        opacity: 0.9;
-    }
-    .hh-brand-pill {
-        display: inline-block;
-        padding: 5px 12px;
-        border-radius: 999px;
-        background-color: rgba(255,255,255,0.18);
-        font-size: 12px;
-    }
-    .hh-link a {
-        color: #E0F2FE;
-        text-decoration: underline;
-        font-size: 13px;
-    }
-    .hh-card {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 18px;
-        margin-bottom: 16px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-        border: 1px solid #E0E7FF;
-    }
-    .hh-card-title {
-        font-size: 17px;
-        font-weight: 700;
-        color: #003262;
-        margin-bottom: 10px;
-    }
-    .hh-footer {
-        text-align: center;
-        margin-top: 40px;
-        padding: 15px;
-        color: #737373;
-        font-size: 13px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+    Load ICD-10 data, with Parquet acceleration if available.
+    Returns: df, code_col, desc_col
+    """
+    if os.path.exists(ICD_PARQUET):
+        df = pd.read_parquet(ICD_PARQUET)
+    else:
+        df = pd.read_excel(ICD_XLSX, dtype=str)
+        df.to_parquet(ICD_PARQUET, index=False)
 
-# -----------------------------
-# Load ICD-10 dataset
-# -----------------------------
-file_path = "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"
+    # Clean column names
+    df.columns = [c.strip().replace("\n", " ").replace("  ", " ") for c in df.columns]
 
-@st.cache_data
-def load_data():
+    # Detect code + description columns
+    code_candidates = ["ICD10", "ICD-10 Code", "Code", "DIAG_CD"]
+    desc_candidates = ["Description", "LONG_DESCRIPTION", "LONG_DESC", "Full Description"]
+
+    code_col = None
+    desc_col = None
+
+    for c in df.columns:
+        if c in code_candidates and code_col is None:
+            code_col = c
+        if c in desc_candidates and desc_col is None:
+            desc_col = c
+
+    if code_col is None:
+        code_col = df.columns[0]
+    if desc_col is None:
+        desc_col = df.columns[1]
+
+    # Make sure code/desc are string
+    df[code_col] = df[code_col].astype(str)
+    df[desc_col] = df[desc_col].astype(str)
+
+    # Combined search text for fast substring search
+    df["__search"] = (
+        df[code_col].fillna("") + " " +
+        df[desc_col].fillna("")
+    ).str.lower()
+
+    # Category = first 3 chars; Chapter letter = first char
+    df["category"] = df[code_col].str[:3]
+    df["chapter_letter"] = df[code_col].str[0].str.upper()
+    df["chapter_name"] = df["chapter_letter"].apply(map_chapter)
+
+    return df, code_col, desc_col
+
+
+# ---------------------------
+# Render one ICD card
+# ---------------------------
+def render_icd_card(row, code_col, desc_col, related_df: pd.DataFrame):
+    code = row[code_col]
+    desc = row[desc_col]
+    category = row.get("category", "")
+    chapter_name = row.get("chapter_name", "Unknown")
+
+    # Build tags
+    tags = []
+    if category:
+        tags.append(f"Category: {category}")
+    if chapter_name and chapter_name != "Unknown":
+        tags.append(chapter_name)
+
+    tags_text = " · ".join(tags)
+
+    st.markdown(
+        f"""
+        <div style="
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid #d4dbe8;
+            background: #f8fafc;
+            margin-bottom: 10px;
+        ">
+            <div style="font-size: 18px; font-weight: 700; color:#0f172a;">
+                {code}
+            </div>
+            <div style="font-size: 14px; color:#475569; margin-top:4px;">
+                {desc}
+            </div>
+            <div style="font-size: 12px; color:#64748b; margin-top:6px;">
+                {tags_text}
+            </div>
+            <div style="margin-top:8px;">
+                <button onclick="navigator.clipboard.writeText('{code}')"
+                    style="
+                        padding:4px 10px;
+                        border-radius:5px;
+                        background:#2563eb;
+                        color:white;
+                        border:none;
+                        cursor:pointer;
+                        font-size:12px;
+                    ">
+                    Copy code
+                </button>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Related codes (same category)
+    if not related_df.empty:
+        with st.expander("View related codes in this category"):
+            for _, r in related_df.iterrows():
+                r_code = r[code_col]
+                r_desc = r[desc_col]
+                if r_code == code:
+                    continue
+                st.markdown(f"**{r_code}** — {r_desc}")
+
+
+# ---------------------------
+# Main app
+# ---------------------------
+def main():
+    st.set_page_config(page_title="ICD-10 Explorer", layout="wide")
+    st.title("ICD-10 Explorer · CMS January 2026 Dataset")
+
+    st.caption(
+        "Fast search, filters, related codes, and CSV export — "
+        "powered by the official CMS Section 111 ICD-10 list."
+    )
+
     try:
-        included = pd.read_excel(file_path, sheet_name=0)
-        excluded = pd.read_excel(file_path, sheet_name=1)
+        df, code_col, desc_col = load_icd10()
+    except Exception as e:
+        st.error(
+            "Could not load the ICD-10 file.\n\n"
+            f"Make sure `{ICD_XLSX}` is in the same folder as this app.\n\n"
+            f"Error: {e}"
+        )
+        return
 
-        included.columns = included.columns.str.strip()
-        excluded.columns = excluded.columns.str.strip()
+    # ---------------- Search + filters layout ----------------
+    with st.container():
+        col_search, col_opts = st.columns([2.5, 1.5])
 
-        included["STATUS"] = "Included"
-        excluded["STATUS"] = "Excluded"
+        with col_search:
+            query = st.text_input(
+                "Search ICD-10 code or description",
+                placeholder="Example: E11, diabetes, hypertension, cough…",
+            )
 
-        df = pd.concat([included, excluded], ignore_index=True)
+        with col_opts:
+            exact_code = st.checkbox("Exact code / starts-with match", value=False)
 
-    except:
-        df = pd.read_excel(file_path)
-        df.columns = df.columns.str.strip()
-        df["STATUS"] = "Included"
+            # Chapter filter
+            chapters = sorted(df["chapter_name"].dropna().unique().tolist())
+            chapter_filter = st.selectbox(
+                "Filter by Chapter",
+                options=["All Chapters"] + chapters,
+                index=0,
+            )
 
-    return df
+            category_filter = st.text_input(
+                "Filter by Category (e.g., E11, I10)",
+                placeholder="Optional prefix",
+            )
 
-df = load_data()
+    st.markdown("---")
 
-# -----------------------------
-# Header (Hanvion Health Style)
-# -----------------------------
-st.markdown(
-    """
-    <div class="hh-header">
-        <div class="hh-title">ICD-10 Lookup Dashboard</div>
-        <div class="hh-subtitle">
-            Search Included & Excluded ICD-10 Codes (CMS 2026 Update) with Hanvion Health's Intelligent Lookup Tool.
-        </div>
-        <div class="hh-tagline">
-            <span class="hh-brand-pill">Powered by Hanvion Health</span><br>
-            <span class="hh-link">Visit: <a href="https://hanvionhealth.com" target="_blank">hanvionhealth.com</a></span>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    # ---------------- Suggestions ----------------
+    if query and len(query.strip()) >= 2:
+        q_lower = query.strip().lower()
+        sugg = df[df[code_col].str.lower().str.startswith(q_lower)][code_col].head(5)
+        if not sugg.empty:
+            st.caption("Suggestions (matching code prefix):")
+            st.write(", ".join(sugg.astype(str).tolist()))
 
-# -----------------------------
-# Layout: Filters and Search
-# -----------------------------
-col1, col2 = st.columns([1.2, 3])
+    # ---------------- Guard for empty query ----------------
+    if not query or len(query.strip()) < 2:
+        st.info("Type at least 2 characters to start searching ICD-10.")
+        return
 
-# FILTERS CARD
-with col1:
-    st.markdown("<div class='hh-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='hh-card-title'>Select Code Type</div>", unsafe_allow_html=True)
+    q = query.strip().lower()
 
-    code_type = st.selectbox(
-        "Choose ICD-10 Code Category",
-        ["All Codes", "Included Only", "Excluded Only"]
+    # ---------------- Build mask ----------------
+    mask = pd.Series(True, index=df.index)
+
+    if exact_code:
+        mask &= df[code_col].str.lower().str.startswith(q)
+    else:
+        mask &= df["__search"].str.contains(q, na=False)
+
+    if chapter_filter != "All Chapters":
+        mask &= (df["chapter_name"] == chapter_filter)
+
+    if category_filter.strip():
+        cat = category_filter.strip().upper()
+        mask &= df["category"].str.upper().str.startswith(cat)
+
+    results = df[mask]
+    total = len(results)
+
+    st.write(f"Found **{total}** matching ICD-10 code(s).")
+
+    if total == 0:
+        st.warning("No results found. Try another keyword, code, or remove some filters.")
+        return
+
+    # ---------------- CSV Export ----------------
+    export_df = results.drop(columns=["__search"], errors="ignore")
+    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="⬇ Download results as CSV",
+        data=csv_bytes,
+        file_name="icd10_results.csv",
+        mime="text/csv",
     )
 
-    # Description for each category
-    if code_type == "Included Only":
-        st.info("✔ **Included ICD-10 Codes**: Valid for CMS Section 111 Mandatory Reporting. Accepted by CMS.")
-    elif code_type == "Excluded Only":
-        st.warning("⚠ **Excluded ICD-10 Codes**: Valid medical descriptions but **NOT accepted by CMS** for Section 111 reporting.")
-    else:
-        st.info("Showing all codes from CMS ICD-10 dataset (Included + Excluded).")
+    st.markdown("---")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    # ---------------- Pagination ----------------
+    rows_per_page = 30
+    pages = (total - 1) // rows_per_page + 1
+    col_page, col_info = st.columns([1, 3])
 
-# SEARCH CARD
-with col2:
-    st.markdown("<div class='hh-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='hh-card-title'>Search ICD-10 Code or Diagnosis</div>", unsafe_allow_html=True)
+    with col_page:
+        if pages > 1:
+            page = st.number_input(
+                "Page",
+                min_value=1,
+                max_value=pages,
+                value=1,
+                step=1,
+            )
+        else:
+            page = 1
 
-    search = st.text_input(
-        "Search Diagnosis Name or ICD-10 Code:",
-        placeholder="Example: J45, asthma, fracture, diabetes..."
-    )
+    with col_info:
+        start = (page - 1) * rows_per_page
+        end = min(start + rows_per_page, total)
+        st.caption(f"Showing {start+1}–{end} of {total} codes")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    page_df = results.iloc[start:end]
 
-# Filter based on Included/Excluded
-if code_type == "Included Only":
-    filtered_df = df[df["STATUS"] == "Included"]
-elif code_type == "Excluded Only":
-    filtered_df = df[df["STATUS"] == "Excluded"]
-else:
-    filtered_df = df
+    # Build a small helper mapping category -> subset for related codes
+    # (Only among the filtered result set to keep it light)
+    by_cat = {
+        cat: sub_df
+        for cat, sub_df in page_df.groupby("category")
+    }
 
-# -----------------------------
-# Results Section
-# -----------------------------
-st.markdown("<div class='hh-card'>", unsafe_allow_html=True)
-st.markdown("<div class='hh-card-title'>Results</div>", unsafe_allow_html=True)
+    # ---------------- Render cards ----------------
+    for _, row in page_df.iterrows():
+        cat = row.get("category", None)
+        related_df = pd.DataFrame()
+        if cat in by_cat:
+            related_df = by_cat[cat]
+        render_icd_card(row, code_col, desc_col, related_df)
 
-if search:
-    search_lower = search.lower()
-    results = filtered_df[
-        filtered_df.apply(lambda row: search_lower in row.astype(str).str.lower().to_string(), axis=1)
-    ]
 
-    if results.empty:
-        st.error("❌ No ICD-10 codes found for your search.")
-    else:
-        st.success(f"✨ Found {len(results)} matching result(s)")
-        st.dataframe(results, use_container_width=True)
-else:
-    st.info("Start typing a keyword to search ICD-10 codes. Showing the first 25 codes below.")
-    st.dataframe(filtered_df.head(25), use_container_width=True)
-
-st.markdown("</div>", unsafe_allow_html=True)
-
-# -----------------------------
-# Footer
-# -----------------------------
-st.markdown(
-    """
-    <div class='hh-footer'>
-        © 2025 Hanvion Health • ICD-10 Lookup Platform • CMS 2026 ICD-10 Data • All Rights Reserved.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+if __name__ == "__main__":
+    main()

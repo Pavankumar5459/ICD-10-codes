@@ -1,3 +1,52 @@
+import streamlit as st
+from PIL import Image
+
+# Load Hanvion Logo
+logo = Image.open("assets/hanvion_logo.jpg")
+
+# Premium Hanvion Banner
+st.markdown("""
+    <style>
+        .hanvion-banner {
+            background: linear-gradient(90deg, #7a0010, #b3001c, #7a0010);
+            padding: 18px 28px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        }
+        .hanvion-title {
+            font-size: 32px;
+            font-weight: 800;
+            color: white;
+            margin: 0;
+            user-select: none;
+        }
+        .hanvion-subtitle {
+            font-size: 15px;
+            color: #ffe6e6;
+            margin: 0;
+            margin-top: -6px;
+            user-select: none;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Render banner
+col1, col2 = st.columns([1, 6])
+with col1:
+    st.image(logo, width=110)
+with col2:
+    st.markdown("""
+        <div class="hanvion-banner">
+            <div>
+                <div class="hanvion-title">ICD-10 Explorer</div>
+                <div class="hanvion-subtitle">Powered by Hanvion Health Intelligence</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
 import os
 import streamlit as st
 import pandas as pd

@@ -1,217 +1,197 @@
 import streamlit as st
 import pandas as pd
 import requests
-import os
 
-# ------------------------------------------------------
-#  Hanvion Health – ICD-10 Explorer (Final Version)
-#  Using Perplexity pplx-70b-instruct + clean UI
-# ------------------------------------------------------
-
+# ---------------------------------------------------
+# 1. PAGE CONFIG (Hanvion UI v2)
+# ---------------------------------------------------
 st.set_page_config(
     page_title="Hanvion Health • ICD-10 Explorer",
     layout="wide"
 )
 
-# ----------------------------
-#  LOAD DATASET
-# ----------------------------
-@st.cache_data
-def load_icd10():
-    df = pd.read_excel(
-        "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
-        dtype=str
-    ).fillna("")
-
-    # Rename columns into a standard format
-    col_map = {
-        "CODE": "code",
-        "SHORT DESCRIPTION (VALID ICD-10 FY2025)": "short_desc",
-        "LONG DESCRIPTION (VALID ICD-10 FY2025)": "long_desc",
-        "NF EXCL": "nf_excl"
-    }
-    df = df.rename(columns=col_map)
-
-    df["short_desc"] = df["short_desc"].astype(str)
-    df["long_desc"] = df["long_desc"].astype(str)
-    df["nf_excl"] = df["nf_excl"].astype(str)
-
-    return df[["code", "short_desc", "long_desc", "nf_excl"]]
-
-
-df = load_icd10()
-
-# ----------------------------------------------------------
-#   PERPLEXITY AI — pplx-70b-instruct
-# ----------------------------------------------------------
-def ask_ai(prompt):
-    api_key = st.secrets.get("PPLX_API_KEY", None)
-
-    if not api_key:
-        return None, "❗ Perplexity API key missing in Streamlit Secrets."
-
-    url = "https://api.perplexity.ai/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    payload = {
-        "model": "pplx-70b-instruct",   # ⭐ correct working model
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
-    }
-
-    try:
-        r = requests.post(url, json=payload, headers=headers)
-        data = r.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"], None
-        else:
-            return None, f"AI Error: {data}"
-    except Exception as e:
-        return None, f"AI Error: {str(e)}"
-
-
-# ----------------------------------------------------------
-#  GLOBAL HANVION UI STYLE
-# ----------------------------------------------------------
+# ---------------------------------------------------
+# 2. CSS — Premium Hanvion UI
+# ---------------------------------------------------
 st.markdown("""
 <style>
 
 body {
-    font-family: 'Segoe UI', sans-serif;
+    background-color: #f7f9fc !important;
 }
 
-/* HEADER CARD */
+/* Blue header */
 .hanvion-header {
+    background: linear-gradient(90deg, #003f73, #005fa3);
     padding: 45px;
-    border-radius: 14px;
-    background: linear-gradient(90deg, #003975, #0062AA);
-    color: white;
+    border-radius: 16px;
     text-align: center;
     margin-bottom: 35px;
 }
-
-/* INPUT CLEAN LOOK */
-.stTextInput>div>div>input {
-    background-color: #F5F8FC;
-    border-radius: 10px;
+.hanvion-header h1 {
+    color: white;
+    font-size: 38px;
+    font-weight: 700;
+}
+.hanvion-header p {
+    color: #d8e7f7;
+    font-size: 17px;
 }
 
-/* SECTION CARD */
+/* Expanded ICD-10 card */
 .code-card {
-    background: #F9F9FF;
-    padding: 25px;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    padding: 22px;
     border-radius: 16px;
-    border: 1px solid #EEE;
-    margin-top: 20px;
+    box-shadow: 0px 3px 10px rgba(0,0,0,0.06);
+    margin-top: 15px;
 }
 
+/* Title inside card */
+.code-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a2a3a;
+}
+
+/* Subtext muted */
+.muted {
+    color: #6b7280;
+    font-size: 14px;
+}
+
+/* Buttons */
+.btn {
+    background: #005fa3;
+    padding: 8px 14px;
+    color: white;
+    border-radius: 8px;
+    border: none;
+}
+.btn:hover {
+    background: #004c82;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------------------------------------------------
-# HEADER
-# ----------------------------------------------------------
+# ---------------------------------------------------
+# 3. Perplexity Function
+# ---------------------------------------------------
+PPLX_API_KEY = st.secrets.get("PPLX_API_KEY", None)
+
+def perplexity_explain(prompt):
+    if not PPLX_API_KEY:
+        return "⚠ Perplexity API key missing in Streamlit Secrets."
+
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {PPLX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "pplx-70b-online",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 300
+    }
+
+    try:
+        r = requests.post(url, headers=headers, json=data, timeout=20)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"AI Error: {str(e)}"
+
+
+# ---------------------------------------------------
+# 4. Load Dataset
+# ---------------------------------------------------
+@st.cache_data
+def load_icd10():
+    df = pd.read_excel("section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx", dtype=str)
+    df = df.fillna("")
+    df.rename(columns={
+        "CODE": "code",
+        "SHORT DESCRIPTION (VALID ICD-10 FY2025)": "short",
+        "LONG DESCRIPTION (VALID ICD-10 FY2025)": "long",
+        "NF EXCL": "nfexcl"
+    }, inplace=True)
+    return df
+
+df = load_icd10()
+
+
+# ---------------------------------------------------
+# 5. HEADER
+# ---------------------------------------------------
 st.markdown("""
 <div class="hanvion-header">
     <h1>Hanvion Health • ICD-10 Explorer</h1>
-    <p>Search validated CMS ICD-10 codes with optional AI explanations.</p>
+    <p>Search official CMS ICD-10 codes with AI-powered educational summaries.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ----------------------------------------------------------
-# SEARCH BAR
-# ----------------------------------------------------------
-search = st.text_input(
+
+# ---------------------------------------------------
+# 6. SEARCH BAR
+# ---------------------------------------------------
+search_term = st.text_input(
     "Search ICD-10 code or diagnosis",
     placeholder="Example: J45, asthma, fracture, diabetes…"
 )
 
 per_page = st.number_input("Results per page", 5, 50, 20)
-page = st.number_input("Page", 1, 9999, 1)
+page = st.number_input("Page", 1, 500000, 1)
 
-# Optional feedback zone
-if not search:
+
+# ---------------------------------------------------
+# 7. FILTER RESULTS
+# ---------------------------------------------------
+if search_term.strip():
+    filtered = df[
+        df["code"].str.contains(search_term, case=False, na=False) |
+        df["short"].str.contains(search_term, case=False, na=False) |
+        df["long"].str.contains(search_term, case=False, na=False)
+    ]
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    current = filtered.iloc[start:end]
+
+    st.write(f"Showing {len(current)} of {len(filtered)} results")
+
+    # ---------------------------------------------------
+    # 8. RENDER RESULTS — CLICK TO EXPAND CARD
+    # ---------------------------------------------------
+    for idx, row in current.iterrows():
+        code = row["code"]
+        title = row["short"]
+        longd = row["long"]
+        nfexcl = row["nfexcl"]
+
+        with st.expander(f"{code} — {title}", expanded=False):
+            st.markdown(f"""
+            <div class="code-card">
+                <div class="code-title">{code} — {title}</div>
+                <p>{longd}</p>
+                <p class="muted"><b>NF EXCL:</b> {nfexcl}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # AI SECTION
+            with st.spinner("AI generating clinical explanation…"):
+                clinical = perplexity_explain(
+                    f"Explain the clinical meaning, common presentation, risks, and management overview for ICD-10 code {code}: {title}. Keep structured."
+                )
+            st.subheader("Clinical explanation (AI, educational only)")
+            st.write(clinical)
+
+            with st.spinner("AI generating patient explanation…"):
+                patient = perplexity_explain(
+                    f"Explain the diagnosis {title} (ICD-10 {code}) in simple patient-friendly language."
+                )
+            st.subheader("Patient explanation")
+            st.write(patient)
+
+else:
     st.info("Begin typing above to search ICD-10 codes.")
-    st.stop()
-
-# ----------------------------------------------------------
-#  FILTER RESULTS
-# ----------------------------------------------------------
-search_lower = search.lower()
-
-results = df[
-    df["code"].str.lower().str.contains(search_lower) |
-    df["short_desc"].str.lower().str.contains(search_lower) |
-    df["long_desc"].str.lower().str.contains(search_lower)
-]
-
-total = len(results)
-start = (page - 1) * per_page
-end = start + per_page
-paginated = results.iloc[start:end]
-
-st.write(f"Showing {start+1}–{min(end, total)} of {total} results.")
-
-# ----------------------------------------------------------
-# DISPLAY MATCHING RESULTS
-# ----------------------------------------------------------
-for _, row in paginated.iterrows():
-    st.markdown(f"""
-    <div class='code-card'>
-        <h3>{row['code']} — {row['short_desc']}</h3>
-        <p>{row['long_desc']}</p>
-        <p><b>NF EXCL:</b> {row['nf_excl']}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # --- Clinical explanation (AI) ---
-    with st.expander("Clinical explanation (educational only)"):
-        if st.button(f"Explain clinically: {row['code']}"):
-            prompt = f"""
-            Provide a clinical explanation for ICD-10 code {row['code']}:
-            {row['short_desc']}
-            {row['long_desc']}
-
-            Include:
-            • clinical meaning
-            • key causes
-            • typical symptoms
-            • how clinicians evaluate
-            • general management (educational only)
-            """
-
-            answer, err = ask_ai(prompt)
-            if err:
-                st.error(err)
-            else:
-                st.write(answer)
-
-    # --- Patient friendly explanation ---
-    with st.expander("Patient explanation"):
-        if st.button(f"Explain simply: {row['code']}"):
-            prompt = f"""
-            Explain this ICD-10 code in simple language for patients:
-            Code: {row['code']}
-            {row['short_desc']}
-            {row['long_desc']}
-
-            Make it friendly and easy to understand.
-            """
-
-            answer, err = ask_ai(prompt)
-            if err:
-                st.error(err)
-            else:
-                st.write(answer)
-
-    # --- Comparison ---
-    with st.expander("Compare with another ICD-10 code"):
-        compare_code = st.text_input(f"Enter comparison code for {row['code']}", key=f"cmp_{row['code']}")
-        if compare_code:
-            prompt = f"Compare ICD-10 codes {row['code']} and {compare_code} in detail."
-            answer, err = ask_ai(prompt)
-            if err:
-                st.error(err)
-            else:
-                st.write(answer)
-

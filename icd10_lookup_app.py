@@ -1,9 +1,10 @@
 # =========================================================
-# Hanvion Health – Advanced ICD-10 Explorer (Theme B)
+# Hanvion Health – Advanced ICD-10 Explorer + AI (Perplexity)
 # =========================================================
 
 import streamlit as st
 import pandas as pd
+import requests
 
 ICD_XLSX = "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx"
 
@@ -208,7 +209,66 @@ def load_icd10():
 
 
 # ---------------------------
-# RENDER ONE RESULT CARD
+# PERPLEXITY AI CALL
+# ---------------------------
+def call_perplexity_icd_explain(icd_code: str, description: str) -> str:
+    """
+    Calls Perplexity AI to explain the disease in simple, safe language.
+    Requires PERPLEXITY_API_KEY in st.secrets.
+    """
+    api_key = st.secrets.get("PERPLEXITY_API_KEY", "")
+    if not api_key:
+        return (
+            "AI is not configured yet. Please add PERPLEXITY_API_KEY to your "
+            "Streamlit secrets to enable disease explanations."
+        )
+
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    system_prompt = (
+        "You are a medical information assistant. "
+        "Explain conditions in clear, non-alarming, patient-friendly language. "
+        "Include typical symptoms, general risk factors, and common treatment options. "
+        "Always remind users that this is general information and not a diagnosis or medical advice, "
+        "and that they should speak with a licensed clinician for personal decisions."
+    )
+
+    user_prompt = (
+        f"ICD-10 code: {icd_code}\n"
+        f"Condition description: {description}\n\n"
+        "Explain what this condition generally means for a patient. "
+        "Structure the answer with short sections: What it is, Common symptoms, "
+        "When to seek medical care, and General treatment options."
+    )
+
+    payload = {
+        "model": "sonar-small-online",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": 500,
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=25)
+        if resp.status_code != 200:
+            return f"AI error (status {resp.status_code}). Please try again later."
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not content:
+            return "AI did not return any content. Please try again."
+        return content
+    except Exception as e:
+        return f"AI request failed: {e}"
+
+
+# ---------------------------
+# RENDER ONE RESULT CARD + AI BUTTON
 # ---------------------------
 def render_icd_card(row, code_col, desc_col, related_df: pd.DataFrame):
     code = row[code_col]
@@ -224,19 +284,43 @@ def render_icd_card(row, code_col, desc_col, related_df: pd.DataFrame):
 
     tag_text = " · ".join(tags)
 
+    # Card layout
     st.markdown(
         f"""
         <div class="hanvion-card">
             <div class="hanvion-code">{code}</div>
             <div class="hanvion-desc">{desc}</div>
             <div class="hanvion-tags">{tag_text}</div>
-            <button class="hanvion-copy-btn" onclick="navigator.clipboard.writeText('{code}')">
-                Copy code
-            </button>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # Buttons row
+    bcol1, bcol2 = st.columns([1.7, 3])
+    with bcol1:
+        # Copy button (JS in HTML)
+        st.markdown(
+            f"""
+            <button class="hanvion-copy-btn" onclick="navigator.clipboard.writeText('{code}')">
+                Copy code
+            </button>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with bcol2:
+        key_learn = f"ai_learn_{code}"
+        if st.button("Learn about this condition (AI)", key=key_learn):
+            # Call AI and store result in session_state
+            explanation = call_perplexity_icd_explain(code, desc)
+            st.session_state[f"ai_explain_{code}"] = explanation
+
+    # Show AI explanation if exists
+    exp_key = f"ai_explain_{code}"
+    if exp_key in st.session_state:
+        with st.expander("AI explanation (for educational use only)", expanded=False):
+            st.markdown(st.session_state[exp_key])
 
     # Related codes (same category, if available)
     if related_df is not None and len(related_df) > 1:
@@ -259,7 +343,7 @@ def main():
         <div class="hanvion-header noselect">
             <div class="hanvion-header-title">Hanvion Health · ICD-10 Explorer</div>
             <div class="hanvion-header-subtitle">
-                Fast, clinical-grade ICD-10 lookup with filters, related codes, and export.
+                Fast, clinical-grade ICD-10 lookup with filters, related codes, CSV export, and AI-based disease explanations.
             </div>
         </div>
         """,
@@ -367,6 +451,17 @@ def main():
         cat = row.get("category", None)
         related_df = grouped_by_category.get(cat, None)
         render_icd_card(row, code_col, desc_col, related_df)
+
+    # Small disclaimer
+    st.markdown(
+        """
+        <p style="font-size:11px; color:#6b7280; margin-top:20px;" class="noselect">
+        AI explanations are for educational purposes only and are not a substitute for professional medical advice,
+        diagnosis, or treatment. Always consult a licensed clinician for personal medical decisions.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":

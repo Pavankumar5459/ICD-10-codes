@@ -1,6 +1,5 @@
 # ============================================================
-# HANVION HEALTH • ICD-10 EXPLORER  (Clean UI + No HTML showing)
-# Dataset used: section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx
+# HANVION HEALTH • ICD-10 EXPLORER  (Clean, No Emojis, No Auto Results)
 # ============================================================
 
 import streamlit as st
@@ -19,7 +18,7 @@ st.set_page_config(
     page_icon="💠"
 )
 
-# Hanvion style (no HTML leakage)
+# Hanvion theme
 st.markdown("""
 <style>
 .han-card {
@@ -46,7 +45,7 @@ st.markdown("""
 
 
 # ============================================================
-# LOAD DATASET (AUTO-MAPPING ANY COLUMN NAMES)
+# LOAD DATASET (any column names supported)
 # ============================================================
 @st.cache_data
 def load_data():
@@ -78,40 +77,11 @@ def load_data():
     out["category"] = df.get(col_cat, "N/A")
     return out
 
-
 df = load_data()
 
 
 # ============================================================
-# SEVERITY HEURISTIC
-# ============================================================
-def get_severity(code, desc):
-    text = f"{code} {desc}".lower()
-    if "coma" in text or "shock" in text or "respiratory failure" in text:
-        return "Severe", "🔴🔴"
-    if "acute" in text or "exacerbation" in text:
-        return "Moderate", "🟡🟡"
-    return "Mild", "🟢🟢"
-
-
-# ============================================================
-# OFFLINE AI EXPLANATIONS (NO API NEEDED)
-# ============================================================
-def explain_basic(code, desc):
-    return f"**{code}** classifies the condition:\n\n{desc}\n\nThis helps clinicians document and communicate the diagnosis."
-
-def explain_clinical(code, desc):
-    return f"Clinically, **{code}** groups similar conditions for evaluation, analytics, and follow-up planning."
-
-def explain_patient(code, desc):
-    return f"This code represents the condition: **{desc}**.\nDoctors use this for medical records — not a treatment plan."
-
-def explain_pathway(code, desc):
-    return "Typical educational clinical pathway:\n- Initial evaluation\n- Relevant labs/imaging\n- Severity documentation\n- Follow-up monitoring"
-
-
-# ============================================================
-# PDF EXPORT FEATURE
+# PDF EXPORT
 # ============================================================
 def build_pdf(row):
     buf = BytesIO()
@@ -131,9 +101,7 @@ def build_pdf(row):
     text(f"Description: {row['description']}")
     text(f"Details: {row['long_description']}")
     text(f"Chapter: {row['chapter']}   Category: {row['category']}")
-    sev_label, sev_icon = get_severity(row["code"], row["description"])
-    text(f"Severity: {sev_icon} {sev_label}")
-    text("Educational only — Not medical advice.", 10, False, 40)
+    text("Educational use only.", 10, False, 40)
 
     c.showPage()
     c.save()
@@ -142,59 +110,37 @@ def build_pdf(row):
 
 
 # ============================================================
-# RENDER CARD (PURE STREAMLIT — NO HTML LEAKING)
+# RENDER ICD CARD (NO EMOJIS)
 # ============================================================
 def show_icd_card(row):
     code = row["code"]
     desc = row["description"]
-    longd = row["long_description"]
+    long_desc = row["long_description"]
 
-    sev_label, sev_icon = get_severity(code, desc)
+    st.markdown('<div class="han-card">', unsafe_allow_html=True)
 
-    with st.container():
-        st.markdown('<div class="han-card">', unsafe_allow_html=True)
+    st.markdown(f"<span class='code-badge'>{code}</span>", unsafe_allow_html=True)
+    st.markdown(f"### {desc}")
+    st.markdown(long_desc)
 
-        st.markdown(f"<span class='code-badge'>{code}</span>", unsafe_allow_html=True)
-        st.markdown(f"### {desc}")
-        st.markdown(f"{longd}")
+    st.markdown(
+        f"<p class='han-muted'>Chapter: {row['chapter']} · Category: {row['category']}</p>",
+        unsafe_allow_html=True
+    )
 
-        st.markdown(
-            f"<p class='han-muted'>Chapter: {row['chapter']} · Category: {row['category']}</p>",
-            unsafe_allow_html=True
-        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown(
-            f"<p class='han-muted'>Severity: {sev_icon} {sev_label}</p>",
-            unsafe_allow_html=True
-        )
+    # Explanation sections
+    with st.expander("Clinical Explanation"):
+        st.write(f"{code} is used for documentation and classification of: {desc}")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    with st.expander("Patient-Friendly Summary"):
+        st.write(f"This ICD-10 code describes: {desc}. This helps doctors document the condition accurately.")
 
-    # AI sections
-    with st.expander("🧠 AI Quick Summary"):
-        st.write(explain_basic(code, desc))
-
-    with st.expander("📚 Clinical Explanation"):
-        st.write(explain_clinical(code, desc))
-
-    with st.expander("❤️ Patient-Friendly Explanation"):
-        st.write(explain_patient(code, desc))
-
-    with st.expander("🩺 Educational Clinical Pathway"):
-        st.write(explain_pathway(code, desc))
-
-    # Related codes
-    with st.expander("Related ICD-10 Codes"):
-        prefix = code[:3]
-        rel = df[df["code"].str.startswith(prefix)]
-        for _, r in rel.iterrows():
-            if r["code"] != code:
-                st.write(f"{r['code']} — {r['description']}")
-
-    # PDF EXPORT
+    # PDF button
     pdf = build_pdf(row)
     st.download_button(
-        "Download PDF Summary",
+        "Download Summary as PDF",
         pdf,
         file_name=f"{code}_summary.pdf",
         mime="application/pdf"
@@ -208,27 +154,25 @@ st.title("Hanvion Health • ICD-10 Explorer")
 st.caption("Search ICD codes, view clinical context, and generate summaries.")
 
 query = st.text_input("Search by ICD code or diagnosis")
-per_page = st.number_input("Results per page", min_value=5, max_value=50, value=20)
 
-# Filtering
-if query:
-    q = query.lower()
-    results = df[
-        df["code"].str.lower().str.contains(q) |
-        df["description"].str.lower().str.contains(q)
-    ]
-else:
-    results = df
+# Do NOT show anything unless the user searches
+if not query:
+    st.info("Start typing to search ICD-10 codes...")
+    st.stop()
 
-total = len(results)
-page = st.number_input("Page", min_value=1, max_value=max(1, total // per_page + 1), value=1)
+# Filter results
+q = query.lower()
+results = df[
+    df["code"].str.lower().str.contains(q) |
+    df["description"].str.lower().str.contains(q)
+]
 
-start = (page - 1) * per_page
-end = start + per_page
-subset = results.iloc[start:end]
+if results.empty:
+    st.warning("No matching ICD-10 codes found.")
+    st.stop()
 
-st.caption(f"Showing {start+1}–{min(end, total)} of {total} results")
+st.caption(f"Found {len(results)} results")
 
-# Render
-for _, row in subset.iterrows():
+# Display results
+for _, row in results.iterrows():
     show_icd_card(row)

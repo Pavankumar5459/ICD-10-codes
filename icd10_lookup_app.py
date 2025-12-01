@@ -1,266 +1,298 @@
-# icd10_lookup_app.py
-# Hanvion Health – ICD-10 Explorer with Perplexity AI (Educational use only)
-
-import io
-import sys
+import os
 import textwrap
-from typing import Optional
+from typing import Optional, List
 
 import pandas as pd
 import requests
 import streamlit as st
 
 
-# -----------------------------
-# Page configuration
-# -----------------------------
+# =========================================================
+# 1. PAGE CONFIG & GLOBAL THEME
+# =========================================================
+
 st.set_page_config(
-    page_title="Hanvion – ICD-10 Explorer",
-    page_icon="🩺",
+    page_title="Hanvion Health – ICD-10 Explorer",
+    page_icon="💠",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
-# -----------------------------
-# Hanvion global CSS theme
-# -----------------------------
-HANVION_CSS = """
-<style>
-/* Base layout */
-body, input, textarea, button, select {
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
-                 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                 Helvetica, Arial, sans-serif;
-}
+def inject_hanvion_css() -> None:
+    """Global light + dark Hanvion theme."""
+    st.markdown(
+        """
+        <style>
+        /* Base font */
+        body, input, textarea, button, select {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                         Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
 
-/* Reduce top padding */
-.block-container {
-    max-width: 1180px !important;
-    padding-top: 1rem !important;
-}
+        .block-container {
+            max-width: 1200px !important;
+            padding-top: 1.5rem !important;
+        }
 
-/* Header band */
-.hanvion-header {
-    background: linear-gradient(90deg, #70001a, #9b1235);
-    border-radius: 18px;
-    padding: 22px 26px;
-    color: #fff;
-    box-shadow: 0 16px 40px rgba(112, 0, 26, 0.35);
-    margin-bottom: 22px;
-}
-.hanvion-header h1 {
-    margin: 0;
-    font-size: 30px;
-    letter-spacing: 0.02em;
-}
-.hanvion-header p {
-    margin: 4px 0 0 0;
-    font-size: 13px;
-    opacity: 0.92;
-}
+        /* HEADINGS – prevent text-selection look */
+        h1, h2, h3, h4, h5 {
+            user-select: none;
+        }
 
-/* Info pill row */
-.hanvion-pill-row {
-    display: flex;
-    gap: 10px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-}
-.hanvion-pill {
-    background: rgba(255, 255, 255, 0.12);
-    border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 11px;
-}
+        /* LIGHT MODE */
+        @media (prefers-color-scheme: light) {
+            .hanvion-banner {
+                background: linear-gradient(90deg, #0f172a, #1d3557);
+                color: #f9fafb;
+                border-radius: 18px;
+                padding: 22px 26px;
+                box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+                border: 1px solid rgba(148, 163, 184, 0.4);
+            }
 
-/* Cards */
-.hanvion-card {
-    background: #ffffff;
-    border-radius: 16px;
-    border: 1px solid #e2e8f0;
-    padding: 18px 20px;
-    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
-    margin-bottom: 14px;
-}
-.hanvion-card h3 {
-    margin-top: 0;
-}
+            .hanvion-card {
+                background: #ffffff;
+                border-radius: 14px;
+                padding: 18px 20px;
+                border: 1px solid #e2e8f0;
+                box-shadow: 0 4px 10px rgba(15, 23, 42, 0.06);
+            }
 
-/* Light / dark tweaks */
-@media (prefers-color-scheme: dark) {
-    .hanvion-header {
-        background: linear-gradient(90deg, #450012, #7f1d35);
-        box-shadow: 0 18px 50px rgba(0,0,0,0.7);
-    }
-    .hanvion-card {
-        background: #020617;
-        border-color: #1f2937;
-        box-shadow: 0 16px 30px rgba(0,0,0,0.6);
-    }
-}
+            .hanvion-chip {
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 999px;
+                font-size: 11px;
+                background: #eff6ff;
+                color: #1d4ed8;
+                border: 1px solid #bfdbfe;
+            }
 
-/* Section titles */
-.hanvion-section-title {
-    font-size: 18px;
-    font-weight: 700;
-    margin-bottom: 10px;
-}
+            .hanvion-muted {
+                color: #64748b;
+            }
 
-/* Avoid text selection look on headings */
-h1, h2, h3, h4, .hanvion-section-title {
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-    user-select: none;
-}
+            [data-testid="stSidebar"] {
+                background: #f8fafc;
+                border-right: 1px solid #e2e8f0;
+            }
 
-/* Tiny caption text */
-.hanvion-caption {
-    font-size: 11px;
-    color: #64748b;
-}
+            .code-pill {
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 999px;
+                background: #0f172a;
+                color: #e5e7eb;
+                font-size: 13px;
+                font-weight: 600;
+            }
+        }
 
-/* Badge for categories */
-.hanvion-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: 11px;
-    background: #eff6ff;
-    color: #1d4ed8;
-}
-@media (prefers-color-scheme: dark) {
-    .hanvion-badge {
-        background: #1e293b;
-        color: #93c5fd;
-    }
-}
+        /* DARK MODE */
+        @media (prefers-color-scheme: dark) {
+            .hanvion-banner {
+                background: linear-gradient(90deg, #020617, #111827);
+                color: #e5e7eb;
+                border-radius: 18px;
+                padding: 22px 26px;
+                box-shadow: 0 24px 45px rgba(0, 0, 0, 0.7);
+                border: 1px solid #1f2937;
+            }
 
-/* AI result styling */
-.hanvion-ai-section-title {
-    font-weight: 600;
-    font-size: 13px;
-    margin-top: 10px;
-    margin-bottom: 4px;
-}
-.hanvion-ai-text {
-    font-size: 13px;
-}
+            .hanvion-card {
+                background: #020617;
+                border-radius: 14px;
+                padding: 18px 20px;
+                border: 1px solid #1e293b;
+                box-shadow: 0 4px 14px rgba(15, 23, 42, 0.8);
+            }
 
-/* Smaller Streamlit widgets */
-.css-1dp5vir, .stSelectbox, .stNumberInput, .stTextInput {
-    font-size: 13px;
-}
-</style>
-"""
-st.markdown(HANVION_CSS, unsafe_allow_html=True)
+            .hanvion-chip {
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 999px;
+                font-size: 11px;
+                background: #111827;
+                color: #e5e7eb;
+                border: 1px solid #374151;
+            }
+
+            .hanvion-muted {
+                color: #9ca3af;
+            }
+
+            [data-testid="stSidebar"] {
+                background: #020617;
+                border-right: 1px solid #111827;
+                color: #e5e7eb;
+            }
+
+            .code-pill {
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 999px;
+                background: #f9fafb;
+                color: #020617;
+                font-size: 13px;
+                font-weight: 600;
+            }
+
+            label, .stSelectbox label, .stTextInput label {
+                color: #e5e7eb !important;
+            }
+        }
+
+        /* Sidebar typography */
+        .sidebar-title {
+            font-size: 22px;
+            font-weight: 800;
+            margin-bottom: 2px;
+        }
+        .sidebar-subtitle {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 12px;
+        }
+        .sidebar-section {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #9ca3af;
+            margin-top: 12px;
+            margin-bottom: 6px;
+        }
+
+        .small-label {
+            font-size: 12px;
+            font-weight: 500;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-# -----------------------------
-# Utility: load ICD-10 dataset
-# -----------------------------
-@st.cache_data(show_spinner=True)
+inject_hanvion_css()
+
+
+# =========================================================
+# 2. DATA LOADING HELPERS
+# =========================================================
+
+def _find_existing_path() -> Optional[str]:
+    """Try a few common locations for the ICD-10 Excel file."""
+    candidates = [
+        "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
+        "data/section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
+        "icd10_codes.xlsx",
+        "data/icd10_codes.xlsx",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _find_column(df: pd.DataFrame, keywords: List[str]) -> Optional[str]:
+    """Return the first column name containing any of the keywords."""
+    lowered = {c.lower(): c for c in df.columns}
+    for key in keywords:
+        key = key.lower()
+        for low_name, original in lowered.items():
+            if key in low_name:
+                return original
+    return None
+
+
+@st.cache_data(show_spinner="Loading ICD-10 codes …")
 def load_icd10_data() -> pd.DataFrame:
     """
-    Load ICD-10 dataset from Excel/CSV and normalize column names.
-    Tries a few common filenames so the app is flexible.
+    Load the ICD-10 dataset and normalize into:
+    code, short_description, long_description, chapter, category
     """
-    filenames = [
-        "icd10_codes.xlsx",
-        "icd10_codes.csv",
-        "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
-    ]
-
-    df = None
-    for fname in filenames:
-        try:
-            if fname.lower().endswith(".csv"):
-                df = pd.read_csv(fname, dtype=str)
-            else:
-                df = pd.read_excel(fname, dtype=str)
-            break
-        except FileNotFoundError:
-            continue
-
-    if df is None:
-        raise FileNotFoundError(
-            "No ICD-10 data file found. Please upload "
-            "`icd10_codes.xlsx` or `icd10_codes.csv` to the repository."
+    path = _find_existing_path()
+    if not path:
+        st.error(
+            "ICD-10 dataset not found. Please upload "
+            "`section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx` "
+            "to the app folder."
         )
+        st.stop()
 
-    # Standardize column names
-    df.columns = [c.strip().lower() for c in df.columns]
+    if path.lower().endswith(".xlsx"):
+        df_raw = pd.read_excel(path)
+    else:
+        df_raw = pd.read_csv(path)
 
-    # Try to map common column names to canonical ones
-    col_map = {}
+    # Robust column detection
+    code_col = _find_column(df_raw, ["code"])
+    short_col = _find_column(df_raw, ["short description", "short desc"])
+    long_col = _find_column(df_raw, ["long description", "long desc"])
+    chapter_col = _find_column(df_raw, ["chapter"])
+    status_col = _find_column(df_raw, ["status", "included", "excluded"])
 
-    # Code column
-    for cand in ["code", "icd10code", "icd_10_code", "icd10", "dx", "diagnosis code"]:
-        if cand in df.columns:
-            col_map["code"] = cand
-            break
+    df = pd.DataFrame()
+    df["code"] = df_raw[code_col].astype(str).str.strip() if code_col else ""
+    df["short_description"] = (
+        df_raw[short_col].astype(str).str.strip() if short_col else ""
+    )
+    df["long_description"] = (
+        df_raw[long_col].astype(str).str.strip() if long_col else ""
+    )
+    df["chapter"] = df_raw[chapter_col].astype(str).str.strip() if chapter_col else ""
+    df["status"] = df_raw[status_col].astype(str).str.strip() if status_col else ""
 
-    # Short description
-    for cand in ["short description", "short_desc", "description", "shortdesc"]:
-        if cand in df.columns:
-            col_map["short_description"] = cand
-            break
+    # Category / group helper
+    df["category"] = df["code"].str.extract(r"^([A-Z]\\d{2})", expand=False)
+    df["search_blob"] = (
+        df["code"]
+        + " "
+        + df["short_description"]
+        + " "
+        + df["long_description"]
+        + " "
+        + df["chapter"]
+    ).str.lower()
 
-    # Long description
-    for cand in ["long description", "long_desc", "longdesc"]:
-        if cand in df.columns:
-            col_map["long_description"] = cand
-            break
-
-    # Chapter / category info
-    for cand in ["chapter", "icd10 chapter", "icd-10 chapter"]:
-        if cand in df.columns:
-            col_map["chapter"] = cand
-            break
-
-    for cand in ["category", "subcategory"]:
-        if cand in df.columns:
-            col_map["category"] = cand
-            break
-
-    # Keep only mapped + originals
-    df_std = df.copy()
-
-    # Create standardized columns with safe defaults
-    df_std["code_std"] = df_std[col_map.get("code", df_std.columns[0])].str.strip()
-    df_std["short_std"] = df_std.get(col_map.get("short_description", ""), "").fillna("")
-    df_std["long_std"] = df_std.get(col_map.get("long_description", ""), "").fillna("")
-    df_std["chapter_std"] = df_std.get(col_map.get("chapter", ""), "").fillna("")
-    df_std["category_std"] = df_std.get(col_map.get("category", ""), "").fillna("")
-
-    # Drop rows with no code
-    df_std = df_std[df_std["code_std"].notna() & (df_std["code_std"].str.strip() != "")]
-
-    return df_std.reset_index(drop=True)
+    df = df.dropna(subset=["code"]).reset_index(drop=True)
+    return df
 
 
-# -----------------------------
-# Perplexity AI integration
-# -----------------------------
-def get_perplexity_key() -> Optional[str]:
-    try:
-        return st.secrets["PERPLEXITY_API_KEY"]
-    except Exception:
-        return None
+# =========================================================
+# 3. PERPLEXITY API HELPER
+# =========================================================
+
+def get_pplx_api_key() -> Optional[str]:
+    """Read Perplexity API key from env or Streamlit secrets."""
+    key = os.getenv("PPLX_API_KEY")
+    if not key:
+        try:
+            key = st.secrets.get("PPLX_API_KEY", None)  # type: ignore[attr-defined]
+        except Exception:
+            key = None
+    return key
 
 
-def call_perplexity_api(prompt: str) -> str:
+def call_perplexity_icd_explanation(
+    code: str,
+    short_desc: str,
+    long_desc: str,
+    chapter: str,
+) -> str:
     """
-    Call Perplexity chat/completions API.
-    Returns a human-readable message (never raises inside Streamlit).
+    Call Perplexity's chat completions API to get a brief
+    patient-friendly explanation. Returns either text or an error message.
     """
-    api_key = get_perplexity_key()
+    api_key = get_pplx_api_key()
     if not api_key:
         return (
-            "AI explanation is unavailable because the Perplexity API key "
-            "is not configured. Please add PERPLEXITY_API_KEY in Streamlit secrets."
+            "AI explanation is not configured. "
+            "Please add `PPLX_API_KEY` to Streamlit secrets or environment."
         )
 
     url = "https://api.perplexity.ai/chat/completions"
@@ -269,278 +301,281 @@ def call_perplexity_api(prompt: str) -> str:
         "Content-Type": "application/json",
     }
 
-    payload = {
-        "model": "sonar-small-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.15,
-    }
+    system_prompt = (
+        "You are a clinical educator. Explain ICD-10 codes to patients in clear, "
+        "simple language (US English). Keep it factual, short (3–5 bullet points), "
+        "and remind that this is not a diagnosis or personal medical advice."
+    )
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=40)
-    except Exception as exc:
-        return f"AI request failed: {exc}"
-
-    if resp.status_code != 200:
-        return f"AI error (status {resp.status_code}). Please try again later."
-
-    try:
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return "AI response could not be parsed. Please try again later."
-
-
-def build_ai_prompt(icd_code: str, short_desc: str, long_desc: str) -> str:
-    return textwrap.dedent(
+    user_prompt = textwrap.dedent(
         f"""
-        You are a helpful medical explainer for ICD-10 codes.
-
-        ICD-10 code: {icd_code}
+        Code: {code}
         Short description: {short_desc}
         Long description: {long_desc}
+        ICD-10 chapter: {chapter}
 
-        Provide a structured, **patient-friendly** explanation with markdown headings.
-        Sections:
-        1. What this condition means (plain language)
-        2. Common symptoms
-        3. Typical causes / risk factors
-        4. How doctors usually evaluate it
-        5. Typical treatment approaches
-        6. When someone should seek urgent care
-        7. Short note for healthcare students (1–2 bullet points)
-
-        Keep it concise but informative. Do **not** give personal medical advice.
-        Always end with a bold disclaimer that this is for education only,
-        not a diagnosis or treatment plan.
+        Explain what this diagnosis usually means, typical symptoms or scenarios, and
+        when a person should talk to a clinician. Do NOT mention ICD-10 or billing.
         """
     ).strip()
 
+    payload = {
+        "model": "sonar",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.4,
+        "max_tokens": 400,
+    }
 
-# -----------------------------
-# Main page layout
-# -----------------------------
-def main():
-    # Header
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        if resp.status_code != 200:
+            return f"AI error (status {resp.status_code}). Please try again later."
+
+        data = resp.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        if not content:
+            return "AI did not return any text. Please try again later."
+        return content
+
+    except Exception as e:  # network / parsing errors
+        return f"AI error: {e}"
+
+
+# =========================================================
+# 4. UI HELPERS
+# =========================================================
+
+def render_sidebar(df: pd.DataFrame) -> dict:
+    """Sidebar filters & info. Returns a dict of filter values."""
+    st.sidebar.markdown(
+        '<div class="sidebar-title">Hanvion Health</div>'
+        '<div class="sidebar-subtitle">ICD-10 Lookup • Education</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.markdown(
+        '<div class="sidebar-section">Search Filters</div>',
+        unsafe_allow_html=True,
+    )
+
+    query = st.sidebar.text_input(
+        "Search by code or diagnosis",
+        placeholder="Example: diabetes, asthma, E11.9",
+    )
+
+    code_prefix = st.sidebar.selectbox(
+        "Code starts with",
+        ["All"] + [chr(c) for c in range(ord("A"), ord("Z") + 1)],
+        index=0,
+    )
+
+    include_status = "All"
+    if "status" in df.columns and df["status"].notna().any():
+        options = ["All"] + sorted(df["status"].dropna().unique().tolist())
+        include_status = st.sidebar.selectbox("Status filter", options)
+
+    page_size = st.sidebar.slider("Codes per page", 10, 50, 30, step=5)
+
+    st.sidebar.markdown(
+        '<div class="sidebar-section">Dataset</div>',
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption(
+        f"{len(df):,} ICD-10 codes loaded. Not a billing tool. "
+        "Educational lookup only."
+    )
+
+    return {
+        "query": query,
+        "code_prefix": code_prefix,
+        "status": include_status,
+        "page_size": page_size,
+    }
+
+
+def apply_filters(df: pd.DataFrame, params: dict) -> pd.DataFrame:
+    df_f = df.copy()
+
+    # Code prefix filter
+    prefix = params.get("code_prefix", "All")
+    if prefix != "All":
+        df_f = df_f[df_f["code"].str.startswith(prefix)]
+
+    # Status filter (if present)
+    status = params.get("status", "All")
+    if status != "All" and "status" in df_f.columns:
+        df_f = df_f[df_f["status"] == status]
+
+    # Text search
+    query = params.get("query", "").strip().lower()
+    if query:
+        df_f = df_f[df_f["search_blob"].str.contains(query, na=False)]
+
+    return df_f.reset_index(drop=True)
+
+
+def render_banner():
     with st.container():
         st.markdown(
             """
-            <div class="hanvion-header">
-              <h1>ICD-10 Explorer</h1>
-              <p>Search, filter, and understand ICD-10 diagnosis codes with Hanvion Health.</p>
-              <div class="hanvion-pill-row">
-                <div class="hanvion-pill">Fast code lookup</div>
-                <div class="hanvion-pill">Educational AI explanations</div>
-                <div class="hanvion-pill">Export selected codes as CSV</div>
-              </div>
+            <div class="hanvion-banner">
+                <div style="display:flex; justify-content:space-between; gap:18px; align-items:flex-start;">
+                    <div style="flex:3;">
+                        <div style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.85;">
+                            Hanvion Health · Clinical Navigation
+                        </div>
+                        <h1 style="margin:4px 0 4px 0; font-size:30px; font-weight:800;">
+                            ICD-10 Lookup Dashboard
+                        </h1>
+                        <p style="margin:0; font-size:14px; max-width:640px;">
+                            Search ICD-10 diagnosis codes, explore related codes in the same family,
+                            and generate a short, AI-assisted explanation for educational use.
+                        </p>
+                    </div>
+                    <div style="flex:1; text-align:right; font-size:11px; opacity:0.85;">
+                        <span class="hanvion-chip">Non-diagnostic • Not for billing</span><br/>
+                        <span style="font-size:11px;">Always confirm with official coding sources and a qualified clinician.</span>
+                    </div>
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    # Load data
-    try:
-        df = load_icd10_data()
-    except FileNotFoundError as e:
-        st.error(str(e))
-        st.stop()
 
-    # -------------------------
-    # Filters row
-    # -------------------------
+def render_code_card(row, show_ai: bool = True):
+    """Render one ICD code card + optional AI explanation expander."""
     with st.container():
-        col_search, col_chapter, col_page_size = st.columns([3, 2, 1])
+        st.markdown(
+            f"""
+            <div class="hanvion-card" style="margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; gap:12px;">
+                    <div style="flex:3;">
+                        <div class="code-pill">{row.code}</div>
+                        <h3 style="margin:8px 0 2px 0; font-size:18px; font-weight:700;">
+                            {row.short_description or "No short description"}
+                        </h3>
+                        <p class="hanvion-muted" style="font-size:13px; margin:4px 0 0 0;">
+                            {row.long_description or "No long description available."}
+                        </p>
+                        <p style="font-size:11px; margin-top:6px; opacity:0.85;">
+                            Chapter: <strong>{row.chapter or "N/A"}</strong>
+                            &nbsp;·&nbsp;
+                            Category: <strong>{row.category or "N/A"}</strong>
+                            {f"&nbsp;·&nbsp;Status: <strong>{row.status}</strong>" if hasattr(row, "status") and row.status else ""}
+                        </p>
+                    </div>
+                    <div style="flex:1; text-align:right; font-size:12px;">
+                        <button disabled style="
+                            border-radius:999px;
+                            border:1px solid #e5e7eb;
+                            padding:4px 10px;
+                            font-size:11px;
+                            background:rgba(248,250,252,0.75);
+                            cursor:default;
+                        ">
+                            Copy code: {row.code}
+                        </button>
+                        <div style="font-size:11px; margin-top:6px;" class="hanvion-muted">
+                            Use this code in your EHR / analytics tools as appropriate.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        with col_search:
-            search_text = st.text_input(
-                "Search by code or diagnosis",
-                placeholder="Example: E11, asthma, fracture, diabetes…",
-            ).strip()
-
-        with col_chapter:
-            chapter_options = (
-                ["All chapters"]
-                + sorted(
-                    [c for c in df["chapter_std"].unique() if isinstance(c, str) and c.strip() != ""]
-                )
+    if show_ai:
+        with st.expander("AI explanation (educational use only)", expanded=False):
+            st.caption(
+                "Generated by Perplexity Sonar. Not a diagnosis or billing guidance."
             )
-            selected_chapter = st.selectbox("Filter by chapter", chapter_options)
+            if st.button(
+                "Learn about this condition",
+                key=f"ai_{row.code}",
+            ):
+                with st.spinner("Asking AI for a brief explanation…"):
+                    text = call_perplexity_icd_explanation(
+                        code=row.code,
+                        short_desc=row.short_description,
+                        long_desc=row.long_description,
+                        chapter=row.chapter,
+                    )
+                st.write(text)
 
-        with col_page_size:
-            page_size = st.number_input(
-                "Codes per page",
-                min_value=10,
-                max_value=100,
-                value=30,
-                step=10,
+
+def render_related_codes(df: pd.DataFrame, category: str, current_code: str):
+    """Show other codes in the same 3-character category."""
+    if not category:
+        return
+
+    subset = df[(df["category"] == category) & (df["code"] != current_code)]
+    if subset.empty:
+        return
+
+    with st.expander("View related codes in this category"):
+        for _, r in subset.iterrows():
+            st.markdown(
+                f"- **{r.code}** — {r.short_description or 'No short description'}"
             )
 
-    # -------------------------
-    # Apply filters
-    # -------------------------
-    df_filtered = df.copy()
 
-    if search_text:
-        s = search_text.lower()
-        df_filtered = df_filtered[
-            df_filtered["code_std"].str.lower().str.contains(s)
-            | df_filtered["short_std"].str.lower().str.contains(s)
-            | df_filtered["long_std"].str.lower().str.contains(s)
-        ]
+# =========================================================
+# 5. MAIN APP
+# =========================================================
 
-    if selected_chapter != "All chapters":
-        df_filtered = df_filtered[df_filtered["chapter_std"] == selected_chapter]
+def main():
+    df = load_icd10_data()
 
-    total_codes = len(df_filtered)
+    # Sidebar & filters
+    params = render_sidebar(df)
+    df_filtered = apply_filters(df, params)
+
+    render_banner()
+    st.write("")  # spacing
+
+    # Results summary
+    st.markdown(
+        f"**Showing {len(df_filtered):,} of {len(df):,} codes "
+        f"matching your filters.**"
+    )
 
     # Pagination
-    total_pages = max(1, (total_codes + page_size - 1) // page_size)
-    page_col1, page_col2, page_col3 = st.columns([1, 1, 3])
+    page_size = params["page_size"]
+    total_pages = max(1, (len(df_filtered) + page_size - 1) // page_size)
 
-    with page_col1:
-        current_page = st.number_input(
+    col_page, col_info = st.columns([1, 4])
+    with col_page:
+        page = st.number_input(
             "Page",
             min_value=1,
             max_value=total_pages,
             value=1,
             step=1,
         )
-    with page_col2:
-        st.markdown(
-            f"<p class='hanvion-caption' style='margin-top:27px;'>"
-            f"Showing {min((current_page-1)*page_size+1, total_codes)}–"
-            f"{min(current_page*page_size, total_codes)} of {total_codes} codes"
-            f"</p>",
-            unsafe_allow_html=True,
-        )
+    with col_info:
+        st.caption(f"Showing page {page} of {total_pages}")
 
-    # Page slice
-    start_idx = (current_page - 1) * page_size
-    end_idx = start_idx + page_size
-    df_page = df_filtered.iloc[start_idx:end_idx]
+    start = (page - 1) * page_size
+    end = start + page_size
+    page_df = df_filtered.iloc[start:end]
 
-    # -------------------------
-    # Download button (filtered set)
-    # -------------------------
-    with page_col3:
-        if total_codes > 0:
-            csv_buf = io.StringIO()
-            # Export canonical columns
-            export_cols = ["code_std", "short_std", "long_std", "chapter_std", "category_std"]
-            df_filtered[export_cols].rename(
-                columns={
-                    "code_std": "Code",
-                    "short_std": "Short Description",
-                    "long_std": "Long Description",
-                    "chapter_std": "Chapter",
-                    "category_std": "Category",
-                }
-            ).to_csv(csv_buf, index=False)
-            st.download_button(
-                label="⬇️ Download results as CSV",
-                data=csv_buf.getvalue(),
-                file_name="icd10_results.csv",
-                mime="text/csv",
-            )
+    if page_df.empty:
+        st.info("No codes found. Try adjusting your search or filters.")
+        return
 
-    st.markdown("---")
-
-    if total_codes == 0:
-        st.info("No codes found for this search/filter. Try clearing filters or using a broader term.")
-        st.stop()
-
-    # -------------------------
-    # Render each ICD code card
-    # -------------------------
-    for _, row in df_page.iterrows():
-        code = row["code_std"]
-        short = row["short_std"] or "(no short description)"
-        long = row["long_std"]
-        chapter = row["chapter_std"]
-        category = row["category_std"]
-
-        with st.container():
-            st.markdown('<div class="hanvion-card">', unsafe_allow_html=True)
-
-            # Top row: code + copy button
-            top_col1, top_col2 = st.columns([4, 1])
-
-            with top_col1:
-                st.markdown(
-                    f"### {code}  &nbsp;&nbsp; {short}",
-                    unsafe_allow_html=True,
-                )
-                if long and long.strip() and long.strip().lower() != short.strip().lower():
-                    st.markdown(f"<p class='hanvion-caption'>{long}</p>", unsafe_allow_html=True)
-
-                badge_bits = []
-                if chapter:
-                    badge_bits.append(f"Chapter: {chapter}")
-                if category:
-                    badge_bits.append(f"Category: {category}")
-                if badge_bits:
-                    st.markdown(
-                        f"<span class='hanvion-badge'>{' • '.join(badge_bits)}</span>",
-                        unsafe_allow_html=True,
-                    )
-
-            with top_col2:
-                if st.button("Copy code", key=f"copy_{code}"):
-                    # We can't really write to clipboard from backend; show a hint instead.
-                    st.success(f"Code {code} copied (or ready to copy).")
-
-            # --- AI + related codes row ---
-            ai_col, related_col = st.columns([2, 1])
-
-            # AI section
-            with ai_col:
-                with st.expander("AI explanation (educational use only)", expanded=False):
-                    st.markdown(
-                        "<p class='hanvion-caption'>Powered by Perplexity AI. "
-                        "Do not use as a substitute for professional medical advice.</p>",
-                        unsafe_allow_html=True,
-                    )
-                    if st.button(
-                        "Generate AI overview for this code",
-                        key=f"ai_btn_{code}",
-                    ):
-                        with st.spinner("Asking AI to explain this condition…"):
-                            prompt = build_ai_prompt(code, short, long)
-                            ai_text = call_perplexity_api(prompt)
-                        st.markdown(f"<div class='hanvion-ai-text'>{ai_text}</div>", unsafe_allow_html=True)
-
-            # Related codes section
-            with related_col:
-                with st.expander("View related codes in this category", expanded=False):
-                    if category:
-                        related_df = df[
-                            (df["category_std"] == category) & (df["code_std"] != code)
-                        ].head(15)
-                    else:
-                        # Fallback: same 3-character prefix
-                        prefix = code[:3]
-                        related_df = df[
-                            (df["code_std"].str.startswith(prefix))
-                            & (df["code_std"] != code)
-                        ].head(15)
-
-                    if related_df.empty:
-                        st.caption("No related codes found in this dataset.")
-                    else:
-                        for _, r2 in related_df.iterrows():
-                            st.markdown(
-                                f"- **{r2['code_std']}** — {r2['short_std']}",
-                                unsafe_allow_html=True,
-                            )
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown(
-        "<p class='hanvion-caption' style='margin-top:6px;'>"
-        "ICD-10 descriptions are sourced from your uploaded dataset. "
-        "AI explanations use Perplexity and are for education only."
-        "</p>",
-        unsafe_allow_html=True,
-    )
+    # Render each code card
+    for _, row in page_df.iterrows():
+        render_code_card(row)
+        render_related_codes(df_filtered, row.category, row.code)
 
 
 if __name__ == "__main__":

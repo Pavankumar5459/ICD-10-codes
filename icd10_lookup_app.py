@@ -317,25 +317,34 @@ def render_card(row: pd.Series, full_df: pd.DataFrame):
 
     _, sev_label, sev_bar = estimate_severity(code, desc, longd)
 
-    # Main card
-    st.markdown(
-        f"""
+    # CLEAN + SAFE HTML (NO BROKEN TAGS)
+    html = f"""
         <div class="icd-card">
+
             <div class="code-badge">{code}</div>
-            <h3 style="margin-top:6px; margin-bottom:4px;">{desc}</h3>
-            <p style="font-size:14px; margin-bottom:6px;">{longd}</p>
+
+            <h3 style="margin-top:6px; margin-bottom:4px;">
+                {desc}
+            </h3>
+
+            <p style="font-size:14px; margin-bottom:6px;">
+                {longd}
+            </p>
 
             <p class="muted">
                 Chapter: {chapter} · Category: {category}
             </p>
 
             <p class="muted" style="margin-top:4px;">
-                Severity (heuristic): <span class="severity-pill">{sev_bar} {sev_label}</span>
+                Severity (heuristic): 
+                <span class="severity-pill">{sev_bar} {sev_label}</span>
             </p>
+
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
+
+    # Render safely
+    st.markdown(html, unsafe_allow_html=True)
 
     # AI explanation button
     if st.button(f"AI explanation for {code}", key=f"ai_{code}"):
@@ -343,7 +352,7 @@ def render_card(row: pd.Series, full_df: pd.DataFrame):
             text = ai_explain(code, desc)
         st.info(text)
 
-    # Related code family (same 3-character prefix)
+    # Related codes
     family_prefix = code[:3]
     with st.expander("Related ICD-10 codes in this family"):
         fam = full_df[full_df["code"].str.startswith(family_prefix)]

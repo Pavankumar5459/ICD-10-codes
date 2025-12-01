@@ -1,337 +1,221 @@
-# ============================================================
-# HANVION HEALTH • ICD-10 EXPLORER  (Clean UI + Optional AI Chatbot)
-# ============================================================
-
-import os
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
+import requests
+import os
 
-# Optional OpenAI import (app will still work if this fails)
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-
-# ============================================================
-# PAGE CONFIG
-# ============================================================
-st.set_page_config(
-    page_title="Hanvion Health • ICD-10 Explorer",
-    layout="wide",
-    page_icon="💠",
-)
-
-# Hanvion theme (no emojis, no HTML code leakage)
-st.markdown(
-    """
-<style>
-/* Layout */
-.block-container {
-    max-width: 1100px;
-}
-
-/* Hanvion cards */
-.han-card {
-    background: #faf5ff;
-    border: 1px solid #e9d8fd;
-    padding: 20px;
-    border-radius: 16px;
-    margin-top: 18px;
-}
-
-/* Code badge */
-.code-badge {
-    background: #6b46c1;
-    color: white;
-    padding: 5px 12px;
-    border-radius: 6px;
-    font-weight: 600;
-    font-size: 14px;
-}
-
-/* Muted text */
-.han-muted {
-    color: #6b7280;
-    font-size: 13px;
-}
-
-/* Headings */
-h1, h2, h3 {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-                 Roboto, Helvetica, Arial, sans-serif;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# LOAD DATASET (works with your CMS Excel as-is)
-# ============================================================
+# ------------------------------------------------------------
+# Load ICD-10 Dataset
+# ------------------------------------------------------------
 @st.cache_data
 def load_data():
     df = pd.read_excel(
         "section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx",
-        dtype=str,
+        dtype=str
     ).fillna("")
 
-    # Normalize column names
+    # Normalize columns so the app can work with ANY dataset format
     df.columns = [c.lower().strip() for c in df.columns]
 
-    def pick(*keys):
-        """Pick the first column whose name contains any of the given keys."""
-        for k in keys:
-            for col in df.columns:
-                if k in col:
-                    return col
-        return None
+    # Auto-detect best-matching columns
+    possible_cols = {
+        "code": ["code", "icd10", "icd_10_code", "icd code"],
+        "description": ["description", "short description", "desc"],
+        "long_description": ["long description", "full description", "details"],
+        "chapter": ["chapter", "chap", "icd chapter"],
+        "category": ["category", "diagnosis group", "dx category"]
+    }
 
-    col_code = pick("code", "icd")
-    col_desc = pick("short", "desc")
-    col_long = pick("long")
-    col_chapter = pick("chapter")
-    col_cat = pick("category", "group")
+    colmap = {}
+    for key, patterns in possible_cols.items():
+        for p in patterns:
+            matches = [c for c in df.columns if p in c]
+            if matches:
+                colmap[key] = matches[0]
+                break
 
-    out = pd.DataFrame()
-    out["code"] = df.get(col_code, "")
-    out["description"] = df.get(col_desc, "")
-    out["long_description"] = df.get(col_long, "")
-    out["chapter"] = df.get(col_chapter, "N/A")
-    out["category"] = df.get(col_cat, "N/A")
+    # If missing fields → create blanks
+    for k in ["long_description", "chapter", "category"]:
+        if k not in colmap:
+            df[k] = ""
+            colmap[k] = k
 
-    # Ensure string and no NaN
-    out = out.fillna("").astype(str)
-    return out
-
-
-df = load_data()
+    return df, colmap
 
 
-# ============================================================
-# PDF EXPORT
-# ============================================================
-def build_pdf(row: pd.Series) -> BytesIO:
-    """Create a simple 1-page PDF summary for a code."""
-    buf = BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    w, h = letter
-    y = h - 50
+# ------------------------------------------------------------
+# Perplexity AI Function
+# ------------------------------------------------------------
+def ask_perplexity(prompt):
+    api_key = os.environ.get("PPLX_API_KEY")
 
-    def text(t, size=12, bold=False, space=20):
-        nonlocal y
-        font = "Helvetica-Bold" if bold else "Helvetica"
-        c.setFont(font, size)
-        c.drawString(40, y, t)
-        y -= space
+    if not api_key:
+        return "**AI unavailable — no API key configured.**"
 
-    text("Hanvion Health – ICD-10 Summary", 16, True, 30)
-    text(f"Code: {row['code']}", 14, True)
-    text(f"Description: {row['description']}")
-    if row["long_description"]:
-        text(f"Details: {row['long_description']}")
-    text(f"Chapter: {row['chapter']}   Category: {row['category']}")
-    text("For educational use only. Not a substitute for clinical judgment.", 10, False, 40)
+    url = "https://api.perplexity.ai/chat/completions"
 
-    c.showPage()
-    c.save()
-    buf.seek(0)
-    return buf
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
+    payload = {
+        "model": "pplx-70b-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 230,
+        "temperature": 0.4,
+    }
 
-# ============================================================
-# AI CHATBOT HELPER
-# ============================================================
-def ask_ai_about_code(question: str, row: pd.Series) -> str:
-    """
-    Answer a question about a specific ICD-10 code.
-    Uses OpenAI if configured; otherwise returns a structured fallback message.
-    """
-    code = row["code"]
-    desc = row["description"]
-    long_desc = row["long_description"]
-
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
-    # Fallback if OpenAI is not configured
-    if not api_key or OpenAI is None:
-        lines = [
-            "AI chatbot is not configured for this app yet.",
-            "",
-            "Here is a structured summary instead:",
-            f"- ICD-10 code: {code}",
-            f"- Name: {desc}",
-            f"- Description: {long_desc or 'No additional description available.'}",
-            "",
-            "For personal medical questions, please speak with a licensed clinician.",
-        ]
-        return "\n".join(lines)
-
-    # If OpenAI is available, call it safely
     try:
-        client = OpenAI(api_key=api_key)
+        r = requests.post(url, json=payload, headers=headers, timeout=25)
+        data = r.json()
 
-        prompt = f"""
-You are an educational medical assistant. Explain ICD-10 code {code}
-to a non-technical person in clear, neutral language.
-
-Code: {code}
-Short description: {desc}
-Long description: {long_desc}
-
-User question:
-{question}
-
-Rules:
-- Do NOT give treatment instructions or medication doses.
-- Do NOT tell the user what they personally should do.
-- Emphasize that this is general education, not medical advice.
-- If the question is about personal care, tell them to talk to their doctor.
-"""
-
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You provide short, clear, educational explanations about diagnoses. You never give medical advice.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.3,
-            max_tokens=450,
-        )
-
-        return completion.choices[0].message.content.strip()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        return "AI error — no valid response."
 
     except Exception as e:
-        # Graceful error handling
-        return (
-            "AI error. Showing a basic summary instead.\n\n"
-            f"- ICD-10 code: {code}\n"
-            f"- Name: {desc}\n"
-            f"- Description: {long_desc or 'No additional description available.'}\n\n"
-            "Please speak with a clinician for specific medical questions."
-        )
+        return f"AI error: {e}"
 
 
-# ============================================================
-# RENDER ICD CARD (with optional AI section)
-# ============================================================
-def show_icd_card(row: pd.Series, index: int):
-    code = row["code"]
-    desc = row["description"]
-    long_desc = row["long_description"]
+# ------------------------------------------------------------
+# Hanvion Theme Styles
+# ------------------------------------------------------------
+def inject_css():
+    st.markdown("""
+        <style>
+        .hanvion-card {
+            background:#faf7ff;
+            padding:22px;
+            border-radius:14px;
+            border:1px solid #ece7ff;
+        }
+        .muted { color:#666; font-size:13px; }
+        .code-pill {
+            background:#6b46c1;
+            color:white;
+            padding:4px 12px;
+            border-radius:6px;
+            font-weight:600;
+            font-size:13px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-    # Main card container
-    st.markdown('<div class="han-card">', unsafe_allow_html=True)
 
-    # Header
-    st.markdown(f"<span class='code-badge'>{code}</span>", unsafe_allow_html=True)
-    st.markdown(f"### {desc}")
-    if long_desc:
-        st.markdown(long_desc)
+# ------------------------------------------------------------
+# UI Component — Display a Single ICD Record
+# ------------------------------------------------------------
+def render_record(row):
+    inject_css()
+
+    st.markdown(f"<div class='code-pill'>{row['code']}</div>", unsafe_allow_html=True)
+
+    st.markdown(f"### {row['description']}")
+    st.write(row["long_description"])
 
     st.markdown(
-        f"<p class='han-muted'>Chapter: {row['chapter']} · Category: {row['category']}</p>",
-        unsafe_allow_html=True,
+        f"<p class='muted'>Chapter: {row['chapter']} · Category: {row['category']}</p>",
+        unsafe_allow_html=True
     )
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Clinical explanation
     with st.expander("Clinical explanation (educational only)"):
         st.write(
-            f"This ICD-10 code is used for documentation and reporting of: **{desc}**. "
-            "It helps clinicians and health systems classify this condition consistently."
+            f"This condition (**{row['description']}**) typically refers to: "
+            f"{row['long_description'] or 'No extended information available.'}"
         )
-        if long_desc:
-            st.write(f"Additional context: {long_desc}")
 
-    # Patient-friendly explanation (static)
     with st.expander("Patient-friendly summary"):
         st.write(
-            "This code is part of your medical record and is mainly used for documentation, "
-            "billing, and statistics. It does not by itself describe all details of your health. "
-            "Always ask your doctor if you have questions about what this means for you personally."
+            f"**In simple words:** {row['description']}. "
+            "This is an educational summary, not medical advice."
         )
 
-    # AI chatbot (optional)
+    # ---------------------------
+    # AI CHATBOT SECTION
+    # ---------------------------
     with st.expander("Ask AI about this condition"):
-        st.caption("Educational purposes only. This is not medical advice.")
-        user_q = st.text_input(
-            f"Your question about code {code}",
-            key=f"ai_q_{code}_{index}",
-            placeholder="Example: What does this diagnosis usually mean?",
-        )
-        if user_q:
-            with st.spinner("Generating educational explanation..."):
-                answer = ask_ai_about_code(user_q, row)
-            st.write(answer)
+        st.caption("Educational purposes only. Not medical advice.")
 
-    # PDF download
-    pdf_buf = build_pdf(row)
-    st.download_button(
-        "Download summary as PDF",
-        data=pdf_buf,
-        file_name=f"{code}_summary.pdf",
-        mime="application/pdf",
-        key=f"pdf_{code}_{index}",
+        user_q = st.text_input(
+            f"Your question about code {row['code']}",
+            placeholder="Example: What causes this? How is it treated?"
+        )
+
+        if user_q:
+            with st.spinner("AI is thinking..."):
+                prompt = (
+                    f"You are a medical educator. Explain the condition related "
+                    f"to ICD-10 code {row['code']} ({row['description']}). "
+                    f"User question: {user_q}. Provide a clear, factual, non-medical "
+                    f"educational explanation (no diagnosis or treatment advice)."
+                )
+                ai_answer = ask_perplexity(prompt)
+
+            st.write(ai_answer)
+
+
+# ------------------------------------------------------------
+# MAIN APP
+# ------------------------------------------------------------
+def main():
+    st.set_page_config(
+        page_title="Hanvion Health • ICD-10 Explorer",
+        layout="wide"
     )
 
+    st.title("Hanvion Health · ICD-10 Explorer")
+    st.caption("Search ICD-10 codes, view clinical context, and learn using AI (optional).")
 
-# ============================================================
-# MAIN APP
-# ============================================================
-def main():
-    st.title("Hanvion Health • ICD-10 Explorer")
-    st.caption("Search ICD codes, view clinical context, and generate summaries. For educational use only.")
+    df, col = load_data()
 
-    # Search box
     query = st.text_input(
         "Search by ICD code or diagnosis",
-        placeholder="Example: E11, diabetes, asthma, fracture",
+        placeholder="Example: E11, asthma, cholera"
     )
 
-    # Do NOT show any codes until user searches
-    if not query:
-        st.info("Start typing above to search ICD-10 codes. No records are shown until you search.")
+    per_page = st.number_input("Results per page", 5, 50, 20)
+    page = st.number_input("Page", 1, 99999, 1)
+
+    # -----------------------------
+    # No results shown until user searches
+    # -----------------------------
+    if not query.strip():
+        st.info("Start typing above to search ICD-10 codes.")
         return
 
-    # Filter results
     q = query.lower().strip()
-    filtered = df[
-        df["code"].str.lower().str.contains(q)
-        | df["description"].str.lower().str.contains(q)
-        | df["long_description"].str.lower().str.contains(q)
+
+    results = df[
+        df[col["code"]].str.contains(q, case=False) |
+        df[col["description"]].str.contains(q, case=False) |
+        df[col["long_description"]].str.contains(q, case=False)
     ]
 
-    if filtered.empty:
-        st.warning("No matching ICD-10 codes found for your search.")
+    total = len(results)
+    st.caption(f"Showing results for **{query}** — {total} matches found.")
+
+    if total == 0:
+        st.warning("No matching ICD-10 codes found.")
         return
 
-    # Simple pagination: how many per page
-    per_page = st.number_input("Results per page", 5, 100, 20, step=5)
-    total = len(filtered)
-    max_page = max(1, (total - 1) // per_page + 1)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_results = results.iloc[start:end]
 
-    page = st.number_input("Page", min_value=1, max_value=max_page, value=1, step=1)
-
-    st.caption(f"Showing {per_page} results per page · {total} total matches")
-
-    start = int((page - 1) * per_page)
-    end = int(start + per_page)
-
-    page_df = filtered.iloc[start:end]
-
-    # Show each result
-    for i, (_, row) in enumerate(page_df.iterrows()):
-        show_icd_card(row, index=start + i)
+    for _, row in page_results.iterrows():
+        st.markdown("<div class='hanvion-card'>", unsafe_allow_html=True)
+        render_record({
+            "code": row[col["code"]],
+            "description": row[col["description"]],
+            "long_description": row.get(col.get("long_description"), ""),
+            "chapter": row.get(col.get("chapter"), "N/A"),
+            "category": row.get(col.get("category"), "N/A"),
+        })
+        st.markdown("</div><br>", unsafe_allow_html=True)
 
 
+# ------------------------------------------------------------
+# Run App
+# ------------------------------------------------------------
 if __name__ == "__main__":
     main()

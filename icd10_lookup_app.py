@@ -12,357 +12,354 @@ st.set_page_config(
 )
 
 # -------------------------------------------------
-# GLOBAL STYLING
+# GLOBAL CSS (UI + Voice button styling)
 # -------------------------------------------------
-CUSTOM_CSS = """
+st.markdown("""
 <style>
 .stApp {
     background-color: #f4f7fb;
     font-family: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", sans-serif;
 }
 
-.block-container {
-    padding-top: 1.5rem;
-}
+/* Remove top padding */
+.block-container { padding-top: 1.5rem; }
 
 /* Hero card */
 .hero-card {
     background: linear-gradient(135deg, #004c97, #0077b6);
     border-radius: 1.5rem;
     padding: 2.5rem 3rem;
-    color: #ffffff;
-    box-shadow: 0 18px 35px rgba(15, 23, 42, 0.4);
+    color: white;
+    box-shadow: 0 18px 35px rgba(0,0,0,0.22);
     margin-bottom: 1.75rem;
 }
 .hero-title {
-    font-size: 2.1rem;
-    font-weight: 700;
-    margin-bottom: 0.4rem;
+    font-size: 2.2rem; font-weight: 700;
 }
 .hero-subtitle {
-    font-size: 0.98rem;
-    opacity: 0.95;
-    max-width: 640px;
+    font-size: 1rem; opacity: 0.95; max-width: 640px;
 }
 .hero-badge {
-    display: inline-flex;
+    margin-top: 0.7rem; padding: 0.3rem 0.8rem;
+    background: rgba(255,255,255,0.26);
+    border-radius: 20px; display: inline-block;
+    font-size: 0.8rem;
+}
+
+/* Search bar container in header */
+.search-container {
+    margin-top: 1.4rem;
+    background: rgba(255,255,255,0.18);
+    padding: 12px;
+    border-radius: 12px;
+    backdrop-filter: blur(6px);
+    display: flex;
+    gap: 10px;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0.75rem;
-    border-radius: 999px;
-    background-color: rgba(15, 23, 42, 0.3);
-    font-size: 0.75rem;
-    margin-top: 0.9rem;
 }
 
-/* Soft cards */
+/* Search input */
+#icd_search_input {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    font-size: 15px;
+}
+
+/* Icon search button */
+.search-btn {
+    background: white;
+    border: none;
+    font-size: 20px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}
+
+/* Mic button */
+.mic-btn {
+    background: #ff4757;
+    color: white;
+    border: none;
+    font-size: 18px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+}
+.mic-btn.listening {
+    background: #2ed573 !important;
+}
+
+/* Soft card */
 .soft-card {
-    background-color: #ffffff;
-    border-radius: 1rem;
+    background: white;
     padding: 1.3rem 1.4rem;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.08);
+    border-radius: 1rem;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.07);
     margin-bottom: 1rem;
-}
-
-/* Info bar */
-.info-bar {
-    background-color: #f1f5f9;
-    border-radius: 0.8rem;
-    padding: 0.75rem 1rem;
-    font-size: 0.82rem;
-    margin: 0.3rem 0 0.8rem 0;
 }
 
 /* AI box */
 .ai-box {
-    background-color: #f8fafc;
+    background: #f8fafc;
+    padding: 1rem;
     border-radius: 0.8rem;
-    padding: 0.9rem 1rem;
-    font-size: 0.9rem;
     border: 1px solid #e2e8f0;
-    margin-top: 0.7rem;
-}
-.ai-box h4 {
-    margin-top: 0;
-    margin-bottom: 0.4rem;
 }
 </style>
-"""
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------
-# READ API KEY FROM STREAMLIT SECRETS
+# READ API KEY
 # -------------------------------------------------
 try:
     PPLX_API_KEY = st.secrets["PPLX_API_KEY"]
-except Exception:
-    PPLX_API_KEY = None  # will show a warning in the UI
+except:
+    PPLX_API_KEY = None
+
+# -------------------------------------------------
+# PERPLEXITY API — UNIVERSAL HANDLER
+# -------------------------------------------------
+def call_perplexity(prompt):
+    if not PPLX_API_KEY:
+        return "⚠️ AI not configured: Add PPLX_API_KEY in Streamlit Secrets."
+
+    url = "https://api.perplexity.ai/chat/completions"
+    headers = {"Authorization": f"Bearer {PPLX_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "pplx-70b",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=40)
+
+        if "json" not in resp.headers.get("Content-Type", ""):
+            return f"⚠️ Unexpected response:\n\n{resp.text[:800]}"
+
+        data = resp.json()
+
+        if "output_text" in data:
+            return data["output_text"]
+
+        if "response" in data:
+            return data["response"]
+
+        if "choices" in data and data["choices"]:
+            return data["choices"][0]["message"]["content"]
+
+        return f"⚠️ Unknown response:\n\n{data}"
+
+    except Exception as e:
+        return f"API Error: {e}"
+
+# -------------------------------------------------
+# AI SUMMARIES (Patient + Clinical)
+# -------------------------------------------------
+@st.cache_data(show_spinner=False)
+def get_ai_summary(code, desc, mode):
+    if mode == "patient":
+        prompt = f"""
+        Explain ICD-10 code {code} ({desc}) in simple patient-friendly language.
+        Include symptoms, meaning, when to see a doctor.
+        Keep under 200 words.
+        """
+    else:
+        prompt = f"""
+        Provide a clinical summary for ICD-10 code {code} ({desc}).
+        Include definition, symptoms, diagnostics, and management.
+        """
+
+    return call_perplexity(prompt)
 
 # -------------------------------------------------
 # LOAD ICD-10 DATA
 # -------------------------------------------------
 @st.cache_data
 def load_icd10():
-    # Excel file must be in the same folder as this script
     df = pd.read_excel("section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx")
-
-    # Normalize columns
     df.columns = df.columns.str.lower().str.strip()
 
-    # Match your file's real column names
-    code_col = "code"
-    short_col = "short description (valid icd-10 fy2025)"
-    long_col = "long description (valid icd-10 fy2025)"
-    nf_col = "nf excl" if "nf excl" in df.columns else None
+    df = df.rename(columns={
+        "code": "code",
+        "short description (valid icd-10 fy2025)": "short_desc",
+        "long description (valid icd-10 fy2025)": "long_desc",
+    })
 
-    # Basic presence check
-    missing = [c for c in [code_col, short_col, long_col] if c not in df.columns]
-    if missing:
-        st.error(f"Expected columns not found in Excel: {missing}")
-        st.write("Available columns:", df.columns.tolist())
-        st.stop()
-
-    # Classify codes as Included vs Excluded using NF EXCL
-    if nf_col:
-        def classify(x):
-            x_str = str(x).strip()
-            return "Excluded" if x_str not in ("", "nan", "NaN") else "Included"
-        df["code_type"] = df[nf_col].apply(classify)
+    if "nf excl" in df.columns:
+        df["code_type"] = df["nf excl"].apply(lambda x: "Excluded" if str(x).strip() else "Included")
     else:
         df["code_type"] = "Included"
 
-    tidy = df[[code_col, short_col, long_col, "code_type"]].copy()
-    tidy = tidy.rename(
-        columns={
-            code_col: "code",
-            short_col: "short_desc",
-            long_col: "long_desc",
-        }
-    )
-    tidy = tidy.sort_values("code").reset_index(drop=True)
-    return tidy
+    return df[["code", "short_desc", "long_desc", "code_type"]].sort_values("code")
 
 icd_df = load_icd10()
 
 # -------------------------------------------------
-# AI CALL HELPERS (YOU DON'T NEED TO TOUCH THIS)
+# HERO HEADER WITH SEARCH + MIC
 # -------------------------------------------------
-def call_perplexity(prompt: str) -> str:
-    """Low-level API call to Perplexity."""
-    if not PPLX_API_KEY:
-        return "⚠️ AI is not configured. Add PPLX_API_KEY in Streamlit Secrets."
-
-    url = "https://api.perplexity.ai/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {PPLX_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "pplx-70b",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }
-
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=40)
-
-        # If Cloudflare / HTML happened
-        if "json" not in resp.headers.get("Content-Type", ""):
-            return f"⚠️ Unexpected response from AI service:\n\n{resp.text[:800]}"
-
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"API Error: {e}"
-
-@st.cache_data(show_spinner=False)
-def get_ai_explanation(code: str, long_desc: str, mode: str) -> str:
-    """
-    Cached AI explanation so it's fast.
-    mode = "patient" or "clinical"
-    """
-    if mode == "clinical":
-        prompt = f"""
-        You are a clinical documentation expert.
-
-        Provide a concise, medically accurate clinical explanation of ICD-10 code {code} ({long_desc}).
-        Include:
-        - Clinical definition and context
-        - Common causes / risk factors
-        - Typical symptoms and diagnostic considerations
-        - High-level management or treatment overview
-
-        Audience: clinicians and coding professionals.
-        Keep it structured with short paragraphs or bullet points, under 220 words.
-        """
-    else:
-        prompt = f"""
-        Explain ICD-10 code {code} ({long_desc}) in friendly, simple language for patients.
-
-        Include:
-        - What this condition means in plain words
-        - Common symptoms people might notice
-        - When they should contact a doctor or seek urgent care
-        - Reassuring, practical guidance (no guarantees, no diagnosis)
-
-        Avoid medical jargon. Use clear language and keep it under 200 words.
-        """
-
-    return call_perplexity(prompt.strip())
-
-# -------------------------------------------------
-# HERO HEADER
-# -------------------------------------------------
-st.markdown(
-    """
+st.markdown("""
 <div class="hero-card">
   <div class="hero-title">ICD-10 Lookup Dashboard</div>
-  <div class="hero-subtitle">
-    Search the latest ICD-10 diagnosis codes and generate both patient-friendly and clinical explanations in one place.
-  </div>
-  <div class="hero-badge">
-    Hanvion Health • 2026 ICD-10 Update • AI Assisted
+  <div class="hero-subtitle">Search ICD-10 with AI + Voice.</div>
+  <div class="hero-badge">Hanvion Health • CMS 2026 ICD-10 Update</div>
+
+  <div class="search-container">
+    <input id="icd_search_input" type="text" placeholder="Search ICD-10 Code or Diagnosis…" />
+    <button class="mic-btn" id="voiceBtn">🎤</button>
+    <button class="search-btn" id="searchBtn">🔍</button>
   </div>
 </div>
-""",
-    unsafe_allow_html=True,
-)
-
-if not PPLX_API_KEY:
-    st.warning("⚠️ AI explanations are disabled because `PPLX_API_KEY` is not set in Streamlit secrets.", icon="⚠️")
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------
-# FILTER BAR (TYPE + SEARCH)
+# JS FOR VOICE SEARCH + ENTER/ESC
 # -------------------------------------------------
-top_left, top_right = st.columns([1.1, 2.1])
+st.markdown("""
+<script>
+let recognizing = false;
 
-with top_left:
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
-    st.write("**Code Type**")
-    type_filter = st.selectbox(
-        "Filter by type",
-        ["All codes", "Included only", "Excluded only"],
-        label_visibility="collapsed",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+document.addEventListener("DOMContentLoaded", () => {
+    const input = document.getElementById("icd_search_input");
+    const searchBtn = document.getElementById("searchBtn");
+    const voiceBtn = document.getElementById("voiceBtn");
 
-with top_right:
-    st.markdown('<div class="soft-card">', unsafe_allow_html=True)
-    st.write("**Search ICD-10 Code or Diagnosis**")
-    query = st.text_input(
-        "Search",
-        placeholder="Example: E11, diabetes, fracture, asthma…",
-        label_visibility="collapsed",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    // ENTER triggers search
+    input.addEventListener("keypress", function(e) {
+        if (e.key === "Enter") { searchBtn.click(); }
+    });
+
+    // ESC clears
+    input.addEventListener("keydown", function(e) {
+        if (e.key === "Escape") { input.value = ""; }
+    });
+
+    // Voice recognition
+    if (!('webkitSpeechRecognition' in window)) {
+        console.log("Speech Recognition not supported.");
+        return;
+    }
+
+    const recognition = new webkitSpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    voiceBtn.addEventListener("click", () => {
+        if (!recognizing) {
+            recognizing = true;
+            voiceBtn.classList.add("listening");
+            recognition.start();
+        } else {
+            recognizing = false;
+            voiceBtn.classList.remove("listening");
+            recognition.stop();
+        }
+    });
+
+    recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        input.value = text;
+        recognizing = false;
+        voiceBtn.classList.remove("listening");
+        searchBtn.click();
+    };
+
+    recognition.onerror = () => {
+        recognizing = false;
+        voiceBtn.classList.remove("listening");
+    };
+});
+</script>
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------
-# FILTER LOGIC
+# STREAMLIT HIDDEN SEARCH CAPTURE
 # -------------------------------------------------
-df_filtered = icd_df.copy()
+query = st.text_input("hidden_query", key="query_holder", label_visibility="collapsed")
 
-if type_filter == "Included only":
-    df_filtered = df_filtered[df_filtered["code_type"] == "Included"]
-elif type_filter == "Excluded only":
-    df_filtered = df_filtered[df_filtered["code_type"] == "Excluded"]
+if st.button("Trigger_Search", key="trigger_hidden"):
+    pass
 
+# Sync JS value into Streamlit
+query = st.session_state.get("search_box", "")
+
+# -------------------------------------------------
+# SEARCH LOGIC
+# -------------------------------------------------
 if query:
-    pattern = query.strip()
-    df_filtered = df_filtered[
-        df_filtered["code"].str.contains(pattern, case=False, na=False)
-        | df_filtered["short_desc"].str.contains(pattern, case=False, na=False)
-        | df_filtered["long_desc"].str.contains(pattern, case=False, na=False)
+    df_filtered = icd_df[
+        icd_df["code"].str.contains(query, case=False, na=False)
+        | icd_df["short_desc"].str.contains(query, case=False, na=False)
+        | icd_df["long_desc"].str.contains(query, case=False, na=False)
     ]
-
-max_rows = 40
-total_matches = len(df_filtered)
-df_show = df_filtered.head(max_rows)
-
-info_text = (
-    f"Showing first {len(df_show)} of {total_matches} matching ICD-10 codes."
-    if query
-    else f"Showing first {len(df_show)} codes. Use search to narrow down."
-)
-
-st.markdown(
-    f'<div class="info-bar">{info_text}</div>',
-    unsafe_allow_html=True,
-)
+else:
+    df_filtered = icd_df.head(40)
 
 # -------------------------------------------------
 # RESULTS + AI PANEL
 # -------------------------------------------------
-left_col, right_col = st.columns([2.2, 1.8])
+c1, c2 = st.columns([2.2, 1.8])
 
-with left_col:
+with c1:
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
     st.write("### ICD-10 Results")
 
-    if df_show.empty:
-        st.write("No matching codes. Try a different search or clear filters.")
-    else:
-        table = df_show.rename(
-            columns={
-                "code": "ICD-10 Code",
-                "short_desc": "Short Description",
-                "long_desc": "Long Description",
-                "code_type": "Type",
-            }
-        )
-        st.dataframe(table, hide_index=True, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.dataframe(
+        df_filtered.rename(columns={
+            "code": "ICD-10 Code",
+            "short_desc": "Short Description",
+            "long_desc": "Long Description",
+            "code_type": "Type"
+        }),
+        hide_index=True,
+        use_container_width=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
 
-with right_col:
+with c2:
     st.markdown('<div class="soft-card">', unsafe_allow_html=True)
+
     st.write("### AI Explanations (Patient + Clinical)")
 
-    if df_show.empty:
-        st.write("Select a search result to enable AI explanations.")
+    if df_filtered.empty:
+        st.write("Search something first.")
     else:
-        selected_index = st.selectbox(
-            "Choose a code:",
-            df_show.index,
-            format_func=lambda i: f"{df_show.loc[i, 'code']} — {df_show.loc[i, 'short_desc']}",
-        )
-        selected_row = df_show.loc[selected_index]
-
-        st.write(f"**{selected_row['code']} — {selected_row['long_desc']}**")
-
-        auto_generate = st.checkbox(
-            "Auto-generate when I select a code",
-            value=True,
-            help="When enabled, both explanations load as soon as you choose a code.",
+        select = st.selectbox(
+            "Choose code:",
+            df_filtered.index,
+            format_func=lambda i: f"{df_filtered.loc[i,'code']} — {df_filtered.loc[i,'short_desc']}"
         )
 
-        generate_clicked = st.button("Generate / Refresh explanations")
+        row = df_filtered.loc[select]
 
-        patient_text = ""
-        clinical_text = ""
+        st.write(f"**{row['code']} — {row['long_desc']}**")
 
-        if auto_generate or generate_clicked:
-            with st.spinner("Generating explanations with AI…"):
-                patient_text = get_ai_explanation(
-                    selected_row["code"],
-                    selected_row["long_desc"],
-                    mode="patient",
-                )
-                clinical_text = get_ai_explanation(
-                    selected_row["code"],
-                    selected_row["long_desc"],
-                    mode="clinical",
-                )
+        auto = st.checkbox("Auto-generate", value=True)
 
-        if patient_text or clinical_text:
-            st.markdown('<div class="ai-box">', unsafe_allow_html=True)
-            st.markdown("<h4>🧑‍⚕️ Patient-friendly explanation</h4>", unsafe_allow_html=True)
-            st.write(patient_text)
-            st.markdown("</div>", unsafe_allow_html=True)
+        btn = st.button("Generate / Refresh")
 
-            st.markdown('<div class="ai-box">', unsafe_allow_html=True)
-            st.markdown("<h4>📋 Clinical explanation</h4>", unsafe_allow_html=True)
-            st.write(clinical_text)
-            st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.caption("Turn on auto-generate or click the button to see both explanations.")
+        p_text = ""
+        c_text = ""
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        if auto or btn:
+            with st.spinner("Generating AI summaries..."):
+                p_text = get_ai_summary(row["code"], row["long_desc"], "patient")
+                c_text = get_ai_summary(row["code"], row["long_desc"], "clinical")
+
+        if p_text:
+            st.markdown('<div class="ai-box"><h4>🧑‍⚕️ Patient Explanation</h4>', unsafe_allow_html=True)
+            st.write(p_text)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        if c_text:
+            st.markdown('<div class="ai-box"><h4>📋 Clinical Explanation</h4>', unsafe_allow_html=True)
+            st.write(c_text)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)

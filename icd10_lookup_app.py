@@ -16,7 +16,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# DARK MODE TOGGLE (stored in session)
+# DARK MODE TOGGLE
 # ==========================================
 if "dark_mode" not in st.session_state:
     st.session_state["dark_mode"] = False
@@ -25,7 +25,7 @@ dark_mode = st.sidebar.toggle("🌙 Dark mode", value=st.session_state["dark_mod
 st.session_state["dark_mode"] = dark_mode
 
 # ==========================================
-# GLOBAL CSS (light + dark)
+# GLOBAL CSS (LIGHT + DARK)
 # ==========================================
 LIGHT_CSS = """
 <style>
@@ -152,7 +152,7 @@ def perplexity_chat(system_prompt: str, user_prompt: str):
     }
 
     payload = {
-        "model": "sonar-pro",  # good quality modern model
+        "model": "sonar-pro",  # modern, valid Perplexity model
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -168,10 +168,13 @@ def perplexity_chat(system_prompt: str, user_prompt: str):
 
         data = resp.json()
 
+        # Newer formats
         if "output_text" in data:
             return data["output_text"], None
         if "response" in data:
             return data["response"], None
+
+        # OpenAI-style fallback
         if "choices" in data and data["choices"]:
             msg = data["choices"][0].get("message", {})
             content = msg.get("content")
@@ -227,10 +230,16 @@ Do NOT give treatment or medication suggestions.
     return perplexity_chat(system, user)
 
 # ==========================================
-# PDF GENERATION
+# PDF GENERATION (SAFE)
 # ==========================================
 def build_pdf(code: str, short_desc: str, long_desc: str,
               patient_text: str, clinical_text: str) -> bytes:
+    # Ensure both texts are strings
+    if not isinstance(patient_text, str) or not patient_text.strip():
+        patient_text = "No patient-friendly summary was generated."
+    if not isinstance(clinical_text, str) or not clinical_text.strip():
+        clinical_text = "No clinical summary was generated."
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     width, height = letter
@@ -240,7 +249,12 @@ def build_pdf(code: str, short_desc: str, long_desc: str,
     def draw_wrapped(text, font_size=10, leading=13):
         nonlocal y
         c.setFont("Helvetica", font_size)
-        for line in textwrap.wrap(text, width=90):
+        safe_text = text.replace("\t", " ")
+        for line in textwrap.wrap(safe_text, width=90):
+            if y < 80:
+                c.showPage()
+                y = height - 60
+                c.setFont("Helvetica", font_size)
             c.drawString(x_margin, y, line)
             y -= leading
 
@@ -262,21 +276,22 @@ def build_pdf(code: str, short_desc: str, long_desc: str,
     c.setFont("Helvetica-Bold", 12)
     c.drawString(x_margin, y, "Patient-friendly explanation")
     y -= 16
-    draw_wrapped(patient_text, font_size=10)
+    draw_wrapped(patient_text)
 
     y -= 18
+
     # Clinical section
     c.setFont("Helvetica-Bold", 12)
     c.drawString(x_margin, y, "Clinical explanation (educational only)")
     y -= 16
-    draw_wrapped(clinical_text, font_size=10)
+    draw_wrapped(clinical_text)
 
     y -= 24
     c.setFont("Helvetica-Oblique", 8)
     c.drawString(
         x_margin,
         y,
-        "Generated for educational purposes only. Not medical advice. © Hanvion Health"
+        "Generated for educational purposes only. Not medical advice. © Hanvion Health",
     )
 
     c.showPage()
@@ -285,7 +300,7 @@ def build_pdf(code: str, short_desc: str, long_desc: str,
     return buf.getvalue()
 
 # ==========================================
-# HEADER
+# HEADER BLOCK
 # ==========================================
 st.markdown(
     """
@@ -298,7 +313,7 @@ st.markdown(
 )
 
 if not st.secrets.get("PPLX_API_KEY"):
-    st.warning("AI explanations are disabled until you set PPLX_API_KEY in Streamlit secrets.", icon="⚠️")
+    st.warning("AI explanations are disabled until PPLX_API_KEY is set in Streamlit secrets.", icon="⚠️")
 
 # ==========================================
 # SEARCH + AUTOCOMPLETE
@@ -314,23 +329,20 @@ with search_col:
 suggest_options = []
 if query and len(query.strip()) >= 2:
     q = query.strip().lower()
-    mask = (
+    mask_suggest = (
         df["code"].str.lower().str.startswith(q)
         | df["short_desc"].str.lower().str.contains(q)
     )
-    suggestions_df = df[mask].head(8)
+    suggestions_df = df[mask_suggest].head(8)
     suggest_options = [
         f"{row.code} — {row.short_desc}" for _, row in suggestions_df.iterrows()
     ]
 
 with suggest_col:
     if suggest_options:
-        picked = st.selectbox(
-            "Suggestions",
-            ["(none)"] + suggest_options,
-        )
+        picked = st.selectbox("Suggestions", ["(none)"] + suggest_options)
         if picked != "(none)":
-            # if user picks suggestion, set query to the code part
+            # If user picks a suggestion, set query to the code part
             query = picked.split(" — ")[0]
 
 st.markdown(
@@ -338,7 +350,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if not query.strip():
+if not query or not query.strip():
     st.info("Type a code or diagnosis above to see matching ICD-10 codes.")
     st.stop()
 
@@ -355,7 +367,8 @@ filtered = df[mask]
 total = len(filtered)
 
 per_page = st.slider("Results per page", 5, 50, 15, 5)
-page = st.number_input("Page", min_value=1, max_value=max(1, (total - 1) // per_page + 1), value=1)
+max_page = max(1, (total - 1) // per_page + 1)
+page = st.number_input("Page", min_value=1, max_value=max_page, value=1)
 
 start = (page - 1) * per_page
 end = start + per_page
@@ -364,7 +377,7 @@ page_df = filtered.iloc[start:end]
 st.write(f"Showing {start + 1}–{min(end, total)} of {total} matching result(s).")
 
 # ==========================================
-# RESULTS + AI
+# RESULTS + AI + PDF
 # ==========================================
 for _, row in page_df.iterrows():
     code = row["code"]
@@ -372,8 +385,8 @@ for _, row in page_df.iterrows():
     long_desc = row["long_desc"]
     nf_excl = row["nf_excl"]
 
-    exp_key = f"exp_{code}"
     with st.expander(f"{code} — {short_desc}", expanded=False):
+        # Code details
         st.markdown(
             f"""
 <div class="code-card">
@@ -389,7 +402,6 @@ for _, row in page_df.iterrows():
 
         colA, colB = st.columns(2)
 
-        # Use session_state to store summaries per code
         clin_key = f"clin_{code}"
         pat_key = f"pat_{code}"
 
@@ -421,14 +433,17 @@ for _, row in page_df.iterrows():
             if pat_key in st.session_state:
                 st.write(st.session_state[pat_key])
 
-        # --- PDF download (only if both summaries exist) ---
+        # --- PDF download (if both are available) ---
         if clin_key in st.session_state and pat_key in st.session_state:
+            patient_text = st.session_state.get(pat_key, "")
+            clinical_text = st.session_state.get(clin_key, "")
+
             pdf_bytes = build_pdf(
                 code,
                 short_desc,
                 long_desc,
-                st.session_state[pat_key],
-                st.session_state[clin_key],
+                patient_text,
+                clinical_text,
             )
 
             st.download_button(

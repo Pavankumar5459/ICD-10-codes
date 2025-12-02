@@ -25,7 +25,7 @@ dark_mode = st.sidebar.toggle("🌙 Dark mode", value=st.session_state["dark_mod
 st.session_state["dark_mode"] = dark_mode
 
 # ==========================================
-# GLOBAL CSS (LIGHT + DARK)
+# LIGHT + DARK CSS
 # ==========================================
 LIGHT_CSS = """
 <style>
@@ -37,74 +37,42 @@ html, body, [class*="css"] {
 }
 .hanvion-header {
     background: linear-gradient(90deg, #004c97, #0077b6);
-    color: #ffffff;
-    padding: 24px 28px;
+    color: white;
+    padding: 26px 30px;
     border-radius: 18px;
-    box-shadow: 0 14px 28px rgba(15,23,42,0.38);
-    margin-bottom: 18px;
+    margin-bottom: 20px;
+    box-shadow: 0 14px 28px rgba(0,0,0,0.25);
 }
-.hanvion-header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; }
-.hanvion-header p { margin: 0; font-size: 14px; opacity: 0.95; }
-
 .code-card {
-    background: #ffffff;
+    background: white;
     border: 1px solid #e2e8f0;
-    border-radius: 14px;
     padding: 16px 18px;
-    margin-top: 4px;
-}
-.code-title { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
-.code-long { font-size: 14px; color: #1f2933; }
-.code-extra { font-size: 12px; color: #4b5563; margin-top: 4px; }
-
-.small-muted { font-size: 12px; color: #6b7280; }
-
-div[data-baseweb="input"] > input {
-    font-size: 15px;
-    padding-top: 10px;
-    padding-bottom: 10px;
+    border-radius: 14px;
+    margin-top: 6px;
 }
 </style>
 """
 
 DARK_CSS = """
 <style>
-html, body, [class*="css"] {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-}
 [data-testid="stAppViewContainer"] {
     background: #020617;
     color: #e5e7eb;
 }
 .hanvion-header {
-    background: radial-gradient(circle at top left, #38bdf8, #0f172a);
-    color: #e5e7eb;
-    padding: 24px 28px;
+    background: radial-gradient(circle at top left, #38bdf8, #1e293b);
+    color: white;
+    padding: 26px 30px;
     border-radius: 18px;
-    box-shadow: 0 18px 45px rgba(0,0,0,0.7);
-    margin-bottom: 18px;
+    margin-bottom: 20px;
+    box-shadow: 0 18px 45px rgba(0,0,0,0.6);
 }
-.hanvion-header h1 { margin: 0 0 4px; font-size: 26px; font-weight: 700; }
-.hanvion-header p { margin: 0; font-size: 14px; opacity: 0.9; }
-
 .code-card {
-    background: #020617;
-    border: 1px solid #1f2937;
-    border-radius: 14px;
+    background: #0f172a;
+    border: 1px solid #1e293b;
     padding: 16px 18px;
-    margin-top: 4px;
-}
-.code-title { font-size: 17px; font-weight: 600; margin-bottom: 4px; color: #e5e7eb; }
-.code-long { font-size: 14px; color: #d1d5db; }
-.code-extra { font-size: 12px; color: #9ca3af; margin-top: 4px; }
-
-.small-muted { font-size: 12px; color: #9ca3af; }
-
-div[data-baseweb="input"] > input {
-    font-size: 15px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-    color: #e5e7eb;
+    border-radius: 14px;
+    margin-top: 6px;
 }
 </style>
 """
@@ -112,187 +80,174 @@ div[data-baseweb="input"] > input {
 st.markdown(DARK_CSS if dark_mode else LIGHT_CSS, unsafe_allow_html=True)
 
 # ==========================================
-# LOAD ICD-10 DATA
+# LOAD CMS ICD-10 FILE (ONLY CMS — NO WHO)
 # ==========================================
 @st.cache_data
-def load_icd10():
+def load_cms_icd10():
     df = pd.read_excel("section111validicd10-jan2026_cms-updates-to-cms-gov.xlsx")
     df.columns = df.columns.str.lower().str.strip()
 
-    df = df.rename(
-        columns={
-            "code": "code",
-            "short description (valid icd-10 fy2025)": "short_desc",
-            "long description (valid icd-10 fy2025)": "long_desc",
-        }
-    )
+    df = df.rename(columns={
+        "code": "code",
+        "short description (valid icd-10 fy2025)": "short_desc",
+        "long description (valid icd-10 fy2025)": "long_desc"
+    })
 
-    if "nf excl" in df.columns:
-        df["nf_excl"] = df["nf excl"]
-    else:
-        df["nf_excl"] = ""
+    df["nf_excl"] = df["nf excl"] if "nf excl" in df.columns else ""
 
     return df[["code", "short_desc", "long_desc", "nf_excl"]].sort_values("code")
 
-
-df = load_icd10()
+df = load_cms_icd10()
 
 # ==========================================
-# PERPLEXITY CHAT HELPER (SONAR-PRO)
+# PERPLEXITY AI (SONAR-PRO) — NO CITATIONS
 # ==========================================
-def perplexity_chat(system_prompt: str, user_prompt: str):
+def perplexity_chat(system_prompt, user_prompt):
     api_key = st.secrets.get("PPLX_API_KEY")
     if not api_key:
-        return None, "Perplexity API key (PPLX_API_KEY) is missing in Streamlit secrets."
+        return None, "Missing PPLX_API_KEY in secrets."
 
-    url = "https://api.perplexity.ai/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
     }
 
     payload = {
-        "model": "sonar-pro",  # modern, valid Perplexity model
+        "model": "sonar-pro",
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.2,
-        "max_tokens": 600,
+        "max_tokens": 600
     }
 
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=30)
+        resp = requests.post("https://api.perplexity.ai/chat/completions",
+                             json=payload, headers=headers, timeout=25)
+
         if resp.status_code != 200:
-            return None, f"AI HTTP {resp.status_code}: {resp.text[:400]}"
+            return None, f"AI HTTP {resp.status_code}: {resp.text[:300]}"
 
         data = resp.json()
 
-        # Newer formats
+        # Modern format
         if "output_text" in data:
             return data["output_text"], None
         if "response" in data:
             return data["response"], None
 
-        # OpenAI-style fallback
+        # Legacy fallback
         if "choices" in data and data["choices"]:
             msg = data["choices"][0].get("message", {})
             content = msg.get("content")
-            if content:
-                return content, None
+            return content, None
 
-        return None, f"AI Error: unexpected response structure: {data}"
+        return None, f"Unexpected AI response: {data}"
     except Exception as e:
         return None, f"AI Error: {e}"
 
-
+# Patient friendly summary
 @st.cache_data(show_spinner=False)
-def get_clinical_summary(code: str, short_desc: str, long_desc: str):
+def get_patient_summary(code, short_desc, long_desc):
     system = (
-        "You are an ICD-10 educator for clinicians. "
-        "You explain codes clearly for medical professionals and coders. "
-        "Do NOT provide treatment recommendations or medical advice."
+        "Explain medical information in clear, simple language. "
+        "NEVER include citations, numbers in brackets, or sources like [1] [2] (1) etc. "
+        "Do not provide medical advice."
     )
     user = f"""
-Provide a concise clinical explanation for ICD-10 code {code}.
+Explain ICD-10 code {code} in simple language.
 
-Short description: {short_desc}
-Long description: {long_desc}
-
-Include:
-- Clinical meaning and typical presentation
-- Common causes or risk factors
-- Typical documentation context (e.g., inpatient vs outpatient)
-Avoid advice or specific treatments.
-"""
-    return perplexity_chat(system, user)
-
-
-@st.cache_data(show_spinner=False)
-def get_patient_summary(code: str, short_desc: str, long_desc: str):
-    system = (
-        "You explain medical information in very simple language for patients. "
-        "You are calm, clear, and avoid jargon. "
-        "You never give medical advice or specific treatments."
-    )
-    user = f"""
-Explain ICD-10 code {code} so a non-medical person can understand.
-
-Short description: {short_desc}
-Long description: {long_desc}
+Short: {short_desc}
+Long: {long_desc}
 
 Explain:
-- What the condition means in everyday words
-- Common symptoms / what people might notice
-- High level of when it's important to speak to a doctor (no urgent/emergency advice)
-Do NOT give treatment or medication suggestions.
+- What this condition means
+- Common symptoms
+- When people usually talk to a doctor
+(No citations, no bracket numbers.)
+"""
+    return perplexity_chat(system, user)
+
+# Clinical summary
+@st.cache_data(show_spinner=False)
+def get_clinical_summary(code, short_desc, long_desc):
+    system = (
+        "You explain ICD-10 codes for clinicians. "
+        "Absolutely no citations or bracket numbers. "
+        "Do not provide treatment advice."
+    )
+    user = f"""
+Provide a clinical explanation for ICD-10 code {code}.
+
+Short: {short_desc}
+Long: {long_desc}
+
+Include:
+- Clinical meaning
+- Typical presentation
+- Common causes
+- Documentation context
+(No citations, no sources.)
 """
     return perplexity_chat(system, user)
 
 # ==========================================
-# PDF GENERATION (SAFE)
+# PDF BUILDER — STABLE VERSION
 # ==========================================
-def build_pdf(code: str, short_desc: str, long_desc: str,
-              patient_text: str, clinical_text: str) -> bytes:
-    # Ensure both texts are strings
+def build_pdf(code, short_desc, long_desc, patient_text, clinical_text):
     if not isinstance(patient_text, str) or not patient_text.strip():
-        patient_text = "No patient-friendly summary was generated."
+        patient_text = "No patient summary available."
     if not isinstance(clinical_text, str) or not clinical_text.strip():
-        clinical_text = "No clinical summary was generated."
+        clinical_text = "No clinical summary available."
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
-    width, height = letter
-    x_margin = 50
-    y = height - 60
 
-    def draw_wrapped(text, font_size=10, leading=13):
+    width, height = letter
+    y = height - 60
+    x = 50
+
+    def wrap(text, size=10, lead=13):
         nonlocal y
-        c.setFont("Helvetica", font_size)
-        safe_text = text.replace("\t", " ")
-        for line in textwrap.wrap(safe_text, width=90):
-            if y < 80:
+        c.setFont("Helvetica", size)
+        safe = text.replace("\t", " ")
+        for line in textwrap.wrap(safe, width=90):
+            if y < 60:
                 c.showPage()
                 y = height - 60
-                c.setFont("Helvetica", font_size)
-            c.drawString(x_margin, y, line)
-            y -= leading
+            c.drawString(x, y, line)
+            y -= lead
 
     # Header
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(x_margin, y, "Hanvion Health – ICD-10 Explanation")
-    y -= 24
+    c.drawString(x, y, "Hanvion Health – ICD-10 Summary")
+    y -= 30
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(x_margin, y, f"Code: {code}")
-    y -= 16
+    c.drawString(x, y, f"Code: {code}")
+    y -= 18
     c.setFont("Helvetica", 11)
-    c.drawString(x_margin, y, f"Short description: {short_desc}")
-    y -= 14
-    c.drawString(x_margin, y, f"Long description: {long_desc}")
-    y -= 24
+    c.drawString(x, y, f"Short: {short_desc}")
+    y -= 16
+    c.drawString(x, y, f"Long: {long_desc}")
+    y -= 28
 
     # Patient section
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(x_margin, y, "Patient-friendly explanation")
-    y -= 16
-    draw_wrapped(patient_text)
-
+    c.drawString(x, y, "Patient-friendly explanation")
     y -= 18
+    wrap(patient_text)
 
-    # Clinical section
+    y -= 20
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(x_margin, y, "Clinical explanation (educational only)")
-    y -= 16
-    draw_wrapped(clinical_text)
+    c.drawString(x, y, "Clinical explanation")
+    y -= 18
+    wrap(clinical_text)
 
-    y -= 24
+    y -= 30
     c.setFont("Helvetica-Oblique", 8)
-    c.drawString(
-        x_margin,
-        y,
-        "Generated for educational purposes only. Not medical advice. © Hanvion Health",
-    )
+    c.drawString(x, y, "Generated for educational purposes only. © Hanvion Health")
 
     c.showPage()
     c.save()
@@ -300,70 +255,58 @@ def build_pdf(code: str, short_desc: str, long_desc: str,
     return buf.getvalue()
 
 # ==========================================
-# HEADER BLOCK
+# HEADER
 # ==========================================
-st.markdown(
-    """
+st.markdown("""
 <div class="hanvion-header">
-  <h1>Hanvion Health · ICD-10 Explorer</h1>
-  <p>Search official CMS ICD-10 codes and generate patient + clinical explanations (for education only).</p>
+    <h1>Hanvion Health · ICD-10 Explorer</h1>
+    <p>Search CMS-official ICD-10 codes. Generate patient & clinical summaries. PDF export included.</p>
 </div>
-""",
-    unsafe_allow_html=True,
-)
-
-if not st.secrets.get("PPLX_API_KEY"):
-    st.warning("AI explanations are disabled until PPLX_API_KEY is set in Streamlit secrets.", icon="⚠️")
+""", unsafe_allow_html=True)
 
 # ==========================================
-# SEARCH + AUTOCOMPLETE
+# SEARCH BAR + AUTOCOMPLETE
 # ==========================================
-search_col, suggest_col = st.columns([2, 1])
+search_col, sugg_col = st.columns([2, 1])
 
 with search_col:
     query = st.text_input(
         "Search ICD-10 code or diagnosis",
-        placeholder="Example: J45, asthma, fracture, diabetes…",
+        placeholder="Example: J45, asthma, diabetes, fracture..."
     )
 
-suggest_options = []
+suggestions = []
 if query and len(query.strip()) >= 2:
-    q = query.strip().lower()
-    mask_suggest = (
+    q = query.lower()
+    mask = (
         df["code"].str.lower().str.startswith(q)
         | df["short_desc"].str.lower().str.contains(q)
     )
-    suggestions_df = df[mask_suggest].head(8)
-    suggest_options = [
-        f"{row.code} — {row.short_desc}" for _, row in suggestions_df.iterrows()
-    ]
+    suggestions = df[mask].head(8)
 
-with suggest_col:
-    if suggest_options:
-        picked = st.selectbox("Suggestions", ["(none)"] + suggest_options)
-        if picked != "(none)":
-            # If user picks a suggestion, set query to the code part
-            query = picked.split(" — ")[0]
+with sugg_col:
+    if len(suggestions) > 0:
+        label_list = ["(none)"] + [
+            f"{row.code} — {row.short_desc}" for _, row in suggestions.iterrows()
+        ]
+        choice = st.selectbox("Suggestions", label_list)
+        if choice != "(none)":
+            query = choice.split(" — ")[0]
 
-st.markdown(
-    f"<p class='small-muted'>Showing codes that match: <strong>{query or '(no query)'}</strong></p>",
-    unsafe_allow_html=True,
-)
-
-if not query or not query.strip():
-    st.info("Type a code or diagnosis above to see matching ICD-10 codes.")
+if not query.strip():
+    st.info("Type at least 1–2 characters to search CMS ICD-10 codes.")
     st.stop()
 
 # ==========================================
 # FILTER RESULTS
 # ==========================================
 q = query.strip().lower()
-mask = (
+mask_res = (
     df["code"].str.lower().str.contains(q)
     | df["short_desc"].str.lower().str.contains(q)
     | df["long_desc"].str.lower().str.contains(q)
 )
-filtered = df[mask]
+filtered = df[mask_res]
 total = len(filtered)
 
 per_page = st.slider("Results per page", 5, 50, 15, 5)
@@ -374,7 +317,7 @@ start = (page - 1) * per_page
 end = start + per_page
 page_df = filtered.iloc[start:end]
 
-st.write(f"Showing {start + 1}–{min(end, total)} of {total} matching result(s).")
+st.write(f"Showing {start + 1}–{min(end, total)} of {total} matches.")
 
 # ==========================================
 # RESULTS + AI + PDF
@@ -386,30 +329,29 @@ for _, row in page_df.iterrows():
     nf_excl = row["nf_excl"]
 
     with st.expander(f"{code} — {short_desc}", expanded=False):
-        # Code details
         st.markdown(
             f"""
 <div class="code-card">
-  <div class="code-title">{code} — {short_desc}</div>
-  <div class="code-long">{long_desc}</div>
-  <div class="code-extra"><strong>NF EXCL:</strong> {nf_excl if str(nf_excl).strip() else "None listed."}</div>
+    <div><b>{code}</b> — {short_desc}</div>
+    <div style="font-size:14px; margin-top:4px;">{long_desc}</div>
+    <div style="font-size:12px; opacity:0.7; margin-top:6px;">
+        <b>NF EXCL:</b> {nf_excl if str(nf_excl).strip() else "None"}
+    </div>
 </div>
 """,
             unsafe_allow_html=True,
         )
 
-        st.markdown("")
-
-        colA, colB = st.columns(2)
-
         clin_key = f"clin_{code}"
         pat_key = f"pat_{code}"
 
-        # --- Clinical explanation ---
+        colA, colB = st.columns(2)
+
+        # --- Clinical summary ---
         with colA:
-            st.subheader("Clinical explanation (educational)")
-            if st.button("Generate clinical summary", key=f"btn_clin_{code}"):
-                with st.spinner("Generating clinical explanation…"):
+            st.subheader("Clinical explanation")
+            if st.button("Generate clinical summary", key=f"btnclin_{code}"):
+                with st.spinner("Querying AI…"):
                     text, err = get_clinical_summary(code, short_desc, long_desc)
                 if err:
                     st.error(err)
@@ -419,11 +361,11 @@ for _, row in page_df.iterrows():
             if clin_key in st.session_state:
                 st.write(st.session_state[clin_key])
 
-        # --- Patient explanation ---
+        # --- Patient summary ---
         with colB:
             st.subheader("Patient explanation")
-            if st.button("Generate patient summary", key=f"btn_pat_{code}"):
-                with st.spinner("Generating patient explanation…"):
+            if st.button("Generate patient summary", key=f"btnpat_{code}"):
+                with st.spinner("Querying AI…"):
                     text, err = get_patient_summary(code, short_desc, long_desc)
                 if err:
                     st.error(err)
@@ -433,24 +375,18 @@ for _, row in page_df.iterrows():
             if pat_key in st.session_state:
                 st.write(st.session_state[pat_key])
 
-        # --- PDF download (if both are available) ---
+        # --- PDF ---
         if clin_key in st.session_state and pat_key in st.session_state:
             patient_text = st.session_state.get(pat_key, "")
             clinical_text = st.session_state.get(clin_key, "")
 
-            pdf_bytes = build_pdf(
-                code,
-                short_desc,
-                long_desc,
-                patient_text,
-                clinical_text,
-            )
+            pdf_bytes = build_pdf(code, short_desc, long_desc, patient_text, clinical_text)
 
             st.download_button(
-                label="📄 Download PDF (patient + clinical)",
+                label="📄 Download PDF",
                 data=pdf_bytes,
-                file_name=f"{code}_hanvion_icd10_summary.pdf",
-                mime="application/pdf",
+                file_name=f"{code}_ICD10_Hanvion.pdf",
+                mime="application/pdf"
             )
         else:
-            st.caption("Generate both explanations to enable PDF download.")
+            st.caption("Generate both summaries to download PDF.")
